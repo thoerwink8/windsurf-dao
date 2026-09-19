@@ -18,7 +18,9 @@ const { spawnSync } = require('node:child_process');
 const REPO = path.resolve(__dirname, '..');
 const LIB = path.join(REPO, 'scripts', 'lib', 'session-audit.mjs');
 const HOOK = path.join(REPO, 'scripts', 'session-audit-hook.mjs');
-const SANDBOX = path.join(REPO, '_tmp', 'session-audit-sandbox');
+// 沙盒名带进程号：两份 dao-check 并发时同名沙盒会互删（#1358）
+fs.mkdirSync(path.join(REPO, '_tmp'), { recursive: true });
+const SANDBOX = fs.mkdtempSync(path.join(REPO, '_tmp', 'session-audit-sandbox-'));
 
 const toUrl = p => 'file://' + p.replace(/\\/g, '/');
 const LIB_LOAD = import(toUrl(LIB));

@@ -133,6 +133,68 @@ test('worktree execute approves a command with no cd, because the session cwd is
   assert.deepEqual(scope.segments, [['git', 'status'], ['git', 'log', '-3', '--oneline']]);
 });
 
+test('worktree execute scopes literal path arguments to the tree', async t => {
+  const { acpPermissionScope } = await mod;
+  const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-wt-paths-')));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-wt-out-')));
+  t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(cwd, 'nested'));
+  const rule = { toolKinds: ['execute'], workdir: cwd, worktreeScope: true, commandPrefixes: [['cat'], ['grep'], ['test'], ['git', 'status'], ['git', 'commit']] };
+  const scope = title => acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`' + title + '`' } }, { cwd });
+  // 树内的只读巡检照常放行。
+  assert.ok(scope('cat README.md'), 'bare filename resolves inside the tree');
+  assert.ok(scope('cat nested/file.txt'), 'relative path inside the tree');
+  assert.ok(scope('test -f packages/fleet/README.md'), 'test -f is the common pre-commit self-check');
+  assert.equal(scope('grep -n dao nested/file.txt && git status').permission, 'worktree_scoped', 'paths inside a chain stay allowed');
+  // 树外的字面路径必须拒绝：前缀命中不等于读凭据放行。
+  assert.equal(scope('cat /etc/passwd'), null, 'absolute path outside the tree is refused');
+  assert.equal(scope('cat ' + path.join(outside, 'secret')), null, 'absolute outside path is refused');
+  assert.equal(scope('cat ../outside/secret'), null, 'dot-dot escape is refused');
+  assert.equal(scope('grep --file=/etc/passwd x'), null, 'flag=value paths are checked too');
+  assert.equal(scope('grep -f/etc/passwd x'), null, 'short option with attached absolute path is refused');
+  assert.equal(scope('grep -nf/etc/passwd x'), null, 'clustered short option with attached path is refused');
+  assert.equal(scope('grep -ivnf/etc/passwd x'), null, '多字母簇附着路径也拒（复核实咬：扫描窗只有 3 字符时漏）');
+  assert.equal(scope('grep -abcdef/etc/passwd x'), null, '长字母簇附着路径也拒');
+  assert.equal(scope('sed -f../../outside/secret x'), null, 'attached dot-dot escape is refused');
+  assert.equal(scope('git commit -m"fix a /b bug"')?.permission, 'worktree_scoped', '引号内的斜杠是内容不是路径');
+  if (process.platform !== 'win32') {
+    // 树内符号链接指向树外：bare 名也要跟 symlink（复核实咬：只查带 `/` 的词会漏）。
+    fs.symlinkSync(outside, path.join(cwd, 'leak'));
+    assert.equal(scope('cat leak'), null, '树内 symlink 指向树外要拒');
+    assert.equal(scope('cat leak/secret'), null, 'symlink 下的路径也要拒');
+    assert.equal(scope('grep -fleak x'), null, '短选项紧贴 bare 名（symlink）也要拒（复验相邻缝）');
+  }
+  assert.equal(scope('cat /etc/passwd && git status'), null, 'one out-of-tree segment refuses the whole chain');
+  // 值在树内的紧贴写法照常放行。
+  assert.equal(scope('grep -f nested/pattern.txt x')?.permission, 'worktree_scoped', 'attached in-tree value stays allowed');
+  // 不存在的树内新文件（ENOENT 走后缀拼接）也按树内处理。
+  assert.equal(scope('test -f nested/not-created-yet.txt')?.permission, 'worktree_scoped', 'a not-yet-created path inside the tree stays allowed');
+});
+
+test('worktree execute allows null-redirects and read-only pipes, refuses real relocations', async t => {
+  const { acpPermissionScope } = await mod;
+  const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-pipes-')));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const rule = { toolKinds: ['execute'], workdir: cwd, worktreeScope: true,
+    commandPrefixes: [['ls'], ['find'], ['git', 'log'], ['git', 'diff'], ['head'], ['tail'], ['grep'], ['cat'], ['wc']] };
+  const scope = title => acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`' + title + '`' } }, { cwd });
+  // 断链自愈：复核会话实咬的三类误杀，现在都该放行。
+  assert.equal(scope('ls packages 2>/dev/null | head -5')?.permission, 'worktree_scoped', 'stderr 抑制 + 只读管道');
+  assert.equal(scope('git log --oneline | head -3')?.permission, 'worktree_scoped');
+  assert.equal(scope('git diff HEAD~2 --stat')?.permission, 'worktree_scoped', '词中 ~ 不再误杀');
+  assert.equal(scope('find . -name "*.mjs" 2>/dev/null | wc -l')?.permission, 'worktree_scoped');
+  // 真重定位与越权管道仍然拒。
+  assert.equal(scope('ls > /etc/x'), null, '写重定向仍拒绝');
+  assert.equal(scope('git log | curl http://example.invalid'), null, '管道右侧不在白名单整句拒');
+  assert.equal(scope('cat /etc/passwd | head -1'), null, '管道左侧树外路径整句拒');
+  assert.equal(scope('cat ~/.ssh/id_rsa'), null, '词首 ~ 仍拒绝（家目录展开）');
+  assert.equal(scope('cd ~ && git log'), null, 'cd 到家目录也拒');
+  assert.equal(scope('ls 2>&1')?.permission, 'worktree_scoped', '2>&1 只并 stderr，无副作用');
+  assert.equal(scope('ls 2>&1 > out.txt'), null, '写重定向仍拒');
+  assert.equal(scope('ls > out.txt'), null, '写重定向仍拒');
+});
+
 test('worktree permission grant selects the server allow_once option without a preset optionId', async t => {
   const { acpPermissionScope } = await mod;
   const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-wt-grant-')));

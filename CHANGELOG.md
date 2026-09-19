@@ -2,6 +2,53 @@
 
 本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
 
+## v2.10.0 — 2026-09-18
+
+### 新功能
+- [devin] feat(选型): cursor-acp-grok-4.6 执行档（grok 腿改走 Cursor） (#1440)
+- [grok] feat(execution): T6 首帧透传 local/cloud + direct 完成不要求 relay 账本 (#1174) (#1375)
+- [devin] feat(fleet): 持久任务会话——指挥官→任务内 Fusion+独立审查（#816） (#1421)
+
+### 修复与维护
+- [devin] docs(fleet): 指挥官+Fusion v2 设计与落地清单（#1460） (#1461)
+- [devin] fix(fleet): 审查腿上游容量/断流判可重试——别把 503 折成「审查没做完」 (#1456)
+- [devin] fix(fleet): 交卷的边界是「有提交」——工人卡在权限但已提交时系统接手 (#1453)
+- [devin] fix(fleet): 提示词要求提交后停手——工人交卷后不再跑额外命令 (#1452)
+- [devin] fix(acp): cd 允许进树内子目录——`cd <树>/packages/fleet && npm test` 不再整句被拒 (#1451)
+- [devin] fix(fleet): 依赖由系统在 prepare 装好——工人只跑 npm test (#1450)
+- [devin] fix(fleet): ACP 启动超时判可重试——执行会话已交卷，别让起会话超时把任务判死 (#1449)
+- [devin] fix(acp): 白名单补 npm test / npm run——任务验收要看测试计数 (#1448)
+- [devin] fix(acp): 复合命令支持 `;` 分段（g13 实咬） (#1446)
+- [devin] fix(acp): 白名单补 echo——复合只读命令不再整句被拒 (#1445)
+- [devin] fix(fleet): 提交身份由系统设——执行会话不再跑 gh-as（白名单外，会卡权限） (#1444)
+- [devin] fix(acp): 补只读巡检白名单——会话读代码不再卡在权限提问 (#1443)
+- [devin] fix(fleet): issue 正文由系统取回塞进提示词；等人在回答单列一态 (#1442)
+- [devin] fix(fleet): 不许取消仍在干活的会话——unknown 先等，收尾只在终态，收树跳过活跃会话 (#1441)
+- [devin] fix(fleet): 起会话前先收本树（g4 实咬） (#1438)
+- [grok] fix(报帅): 无对象同因已关单要 reopen，别靠幂等键假装开过（#1240） (#1391)
+- [grok] fix: DAO_SKILL_HOMES 覆盖值保留 Windows 盘符路径 (#1419)
+- [grok] fix(worker-done): 交卷清退只停本PR工人，主树零stop (#1406)
+- [devin] fix(fleet): 一轮结束释放树租约（首跑实咬） (#1435)
+- [devin] fix(fleet): 启动失败先收本树会话再抛（首跑实咬） (#1432)
+- [devin] fix(fleet): 执行体瞬时故障判可重试（首个真实任务实咬） (#1431)
+- [devin] fix(fleet): worker 用 NativeConnection（真跑实咬） (#1429)
+- [devin] fix(fleet): 真跑必需的接线——读 issue 走 gh-as、提交身份、执行档 agent 取自目录 (#1428)
+- [grok] fix(probe): 周期探针默认不再打退役 newapi（#1174 T7） (#1402)
+- [devin] perf(land): skip protected targets before expensive merge proofs (#1417)
+- [grok] fix(指挥官): 已批准 PR 的真实冲突不再被 readyToLand 吞掉 (#1410)
+- [cc] fix(测试): 沙盒名带进程号——两份 dao-check 并发时同名沙盒互删，是 master 随机红的真因（#1358） (#1377)
+- [cc] fix(fence): flock 没跑成要说清哪一种——「锁被占」根本走不到这条消息（#1358） (#1367)
+- [cc] fix(熔断): 断流（incomplete/timeout）单列不进分母；finish 自带身份优先于 FIFO；diag 的字串 props 也认（#1386） (#1398)
+- [cc] docs(目录): terra/astra 两席拿到执行级证据转 available；上报 mirasim 三件；09-14 观察件收口（#1370 #1333 #1342） (#1393)
+- [cc] fix(清退): 树已回收且租约归了后来者的记录只结自己，不再永远 busy（#1350 第二形状） (#1385)
+- [cc] fix(清退): 树已回收的会话照走清退不再 ENOENT 空转；审官标准页 gh 走封装（#1350） (#1383)
+
+### 其它
+- [cc] test(ledger): #1217 账本按主体@版本攒多条时禁止 find 取最老 (#1401)
+- release: v2.9.0
+
+本文件由 `scripts/release-train.mjs release` 追加，别手改历史段。
+
 ## v2.9.0 — 2026-09-17
 
 ### 新功能

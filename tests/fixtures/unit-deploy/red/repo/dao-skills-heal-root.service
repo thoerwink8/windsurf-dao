@@ -1,0 +1,10 @@
+[Unit]
+Description=red sample heal-root service
+
+[Service]
+Type=oneshot
+User=root
+Environment=HOME=/root
+Environment=DAO_REPO_ROOT=/srv/projects/windsurf-dao
+ExecStart=/usr/bin/node /usr/local/lib/dao-skills-heal/skills-heal.mjs
+ReadWritePaths=/root/.claude /home

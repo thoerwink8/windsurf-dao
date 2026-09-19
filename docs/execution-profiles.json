@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-14T16:57:51.795Z",
+  "updatedAt": "2026-09-18T05:01:57.106Z",
   "freshness": {
     "maxAgeHours": 24,
     "priceMaxAgeHours": 24
@@ -2667,6 +2667,80 @@
       },
       "nativeProviderId": "opencode-go",
       "agentModel": "opencode-go/qwen3.8-max"
+    },
+    {
+      "id": "cursor-acp-grok-4.6",
+      "backend": "acp",
+      "agent": "cursor",
+      "model": "grok-4.6[effort=high,fast=true]",
+      "route": "local",
+      "provider": "cursor-native",
+      "accountPoolId": "cursor-subscription",
+      "modelFamily": "xai",
+      "roles": [
+        "companion",
+        "implementation",
+        "review-low-risk"
+      ],
+      "enabled": true,
+      "availability": {
+        "status": "available",
+        "checkedAt": "2026-09-18T05:01:57.106Z",
+        "evidenceKind": "execution",
+        "sourceId": "acp:d68b7971-14ed-4662-adc5-ed859ab5a9b4",
+        "reason": "真实 cursor ACP 会话返回期望内容 CURSOR-GROK-OK，phase=done 无错；用户 2026-09-18 拍板 grok 腿改走 Cursor（grok.com 402）"
+      },
+      "quality": {
+        "status": "qualified",
+        "tier": "basic",
+        "sourceId": "native-study"
+      },
+      "capabilities": {
+        "read": {
+          "status": "verified",
+          "sourceId": "native-study"
+        },
+        "write": {
+          "status": "verified",
+          "sourceId": "1174-cursor-worktree-commit"
+        },
+        "test": {
+          "status": "unverified"
+        },
+        "interaction": {
+          "status": "verified",
+          "sourceId": "1174-cursor-question"
+        },
+        "resume": {
+          "status": "declared"
+        },
+        "execute": {
+          "status": "verified",
+          "sourceId": "1174-cursor-worktree-commit"
+        }
+      },
+      "pricing": {
+        "status": "unknown",
+        "currency": null,
+        "unit": null,
+        "inputPerMillion": null,
+        "outputPerMillion": null,
+        "cacheReadPerMillion": null,
+        "sourceId": null,
+        "checkedAt": null,
+        "reason": "account_billing_not_observed"
+      },
+      "modelSourceId": "cursor-models",
+      "modelDiscovery": {
+        "status": "listed",
+        "checkedAt": "2026-09-18T05:01:57.106Z",
+        "sourceId": "cursor-models"
+      },
+      "implicitSelection": {
+        "authorized": true,
+        "fallback": "none",
+        "reason": "2026-09-10 用户拍板选路一：执行目录接管选路。订阅制账号，隐式选中不会跨到按量计费路径；起不来就失败，不静默换腿。"
+      }
     }
   ],
   "snapshots": [

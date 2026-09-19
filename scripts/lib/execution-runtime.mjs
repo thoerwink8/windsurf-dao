@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {createRuntime as createMirasimRuntime,judgeTestExecutorIsolation,MirasimRejectedError} from './mirasim-runtime.mjs';
+import {createRuntime as createMirasimRuntime,judgeCompletion,judgeTestExecutorIsolation,MirasimRejectedError} from './mirasim-runtime.mjs';
 import {createAcpRuntime} from './acp-runtime.mjs';
 import {withExecutionFence,writeExecutionRecord} from './execution-fence.mjs';
 import {cwdBelongsToTree,scanSessionProcs} from './dispatch/lease.mjs';
@@ -53,14 +53,24 @@ export function promotedVersion(homeDir,fallback) {
 export function ensureGitWorkspace(repo,branch,{homeDir=os.homedir(),base='origin/master',exec=execFileSync}={}) {
   const root=fs.realpathSync(repo);const git=args=>String(exec('git',['-C',root,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']})).trim();
   git(['check-ref-format','--branch',branch]);
-  const blocks=git(['worktree','list','--porcelain']).split(/\n\n/);
-  for(const b of blocks){const lines=b.split('\n');if(lines.includes('branch refs/heads/'+branch)){const dir=lines.find(l=>l.startsWith('worktree '))?.slice(9);if(dir&&fs.existsSync(dir)){attachControlPlaneHooksOrThrow(dir);return {path:dir,branch,created:false,verified:true};}}}
   const target=path.join(homeDir,'mirasim-worktrees',path.basename(root),branch.replace(/[^\w.-]/g,'-'));
+  // 每棵自建树在它的 git 管理目录里留一枚分支标记：树被 checkout --detach 后，分支行会从
+  // worktree list 消失（只剩 detached），此时**只有路径**能认出树位——而路径由分支名归一化而来，
+  // 不同分支可能撞同一路径（`slot/branch` 与 `slot-branch`）。没有标记就无法证明这棵树是为
+  // 这个分支建的，所以标记缺失/不符一律拒绝（复核实咬：旧写法只凭 dir===target && detached）。
+  const markerOf = dir => path.join(String(exec('git',['-C',dir,'rev-parse','--absolute-git-dir'],{encoding:'utf8',stdio:['ignore','pipe','pipe']})).trim(),'dao-branch');
+  const markedBranch = dir => { try { return fs.readFileSync(markerOf(dir),'utf8').trim(); } catch { return null; } };
+  const blocks=git(['worktree','list','--porcelain']).split(/\n\n/);
+  for(const b of blocks){const lines=b.split('\n');const dir=lines.find(l=>l.startsWith('worktree '))?.slice(9);if(!dir||!fs.existsSync(dir))continue;
+    const onBranch=lines.includes('branch refs/heads/'+branch);
+    const detachedOwned=dir===target&&lines.includes('detached')&&markedBranch(dir)===branch;
+    if(onBranch||detachedOwned){attachControlPlaneHooksOrThrow(dir);return {path:dir,branch,created:false,verified:true};}}
   if(fs.existsSync(target))throw new Error('unregistered worktree path already exists: '+target);
   fs.mkdirSync(path.dirname(target),{recursive:true});let exists=false;try{git(['show-ref','--verify','--quiet','refs/heads/'+branch]);exists=true;}catch{}
   if(exists)git(['worktree','add',target,branch]);else git(['worktree','add','-b',branch,target,base]);
   const head=String(exec('git',['-C',target,'symbolic-ref','--short','HEAD'],{encoding:'utf8'})).trim();
   if(head!==branch)throw new Error('created worktree has wrong branch');
+  try{fs.writeFileSync(markerOf(target),branch+'\n');}catch{/* 写不上标记不挡开工：detached 复用时缺标记会拒，fail-closed */}
   attachControlPlaneHooksOrThrow(target);
   return {path:target,branch,created:true,verified:true};
 }
@@ -81,6 +91,23 @@ export function judgeExecutionCompletion(view) {
   if(!TERMINAL.has(phase))return {status:'running',reason:'session active',confirmedBy:['session']};
   if(!String(view.text??snapshot.text??'').trim()&&!(view.toolCalls||snapshot.toolCalls)?.length)return {status:'unknown',reason:'terminal session has no observable output',confirmedBy:['session']};
   return {status:'done',reason:'agent turn ended with observable output; task artifacts still require acceptance',confirmedBy:['session','output']};
+}
+// 托管 Mirasim 完工：会话层先判（等人 / 无产出 / 已死）；会话说 done 再走
+// route-aware 账本交叉核。cloud/relay 缺账本不得 done；local/ACP 可以。
+// 生产入口 readSession / waitForCompletion 必须走这里——只信 judgeExecutionCompletion
+// 会把缺账本的 cloud 判成 done（#1174 T6 / PR #1375 审官 P1）。
+function judgeManagedCompletion(view, meta = {}, cross = {}) {
+  const sessionVerdict = judgeExecutionCompletion(view);
+  if (sessionVerdict.status !== 'done') return sessionVerdict;
+  return judgeCompletion({
+    view,
+    snapshotMissing: view?.missing === true,
+    ledger: cross.ledger,
+    journal: cross.journal,
+    since: Number(meta.startedAt || meta.createdAt) || 0,
+    route: meta.route,
+    backend: meta.backend,
+  });
 }
 function busy(message,reason='lease-held'){const e=new Error(message);e.code='busy';e.detail={busy:true,reason};return e;}
 // 终态/预留态的正典在 lib/execution-states.mjs——回收侧（board-gc）读同一份，
@@ -197,6 +224,30 @@ export function createExecutionRuntime(opts={}) {
   function metadata(key){return readJson(metaFile(key));}
   const backend=(key,m)=>((m?.backend||(String(key).startsWith('acp:')?'acp':'mirasim'))==='acp'?acp:mirasim);
   const keyOf=m=>m.recordKey||m.sessionKey;
+  // 账本交叉核给完工判据用。ACP 没有 relay 账本；注入的 fake 可以没有 crossCheck，
+  // 缺了就记「没给账本」——cloud 因此不得 done，local/ACP 仍可跳过。
+  function managedCrossCheck(key, meta) {
+    const backendName = meta?.backend || (String(key).startsWith('acp:') ? 'acp' : 'mirasim');
+    if (backendName === 'acp' || String(key).startsWith('acp:')) {
+      return { ledger: { readable: false, why: 'ACP usage is independently collected' }, journal: { readable: false } };
+    }
+    if (typeof mirasim.crossCheck !== 'function') {
+      return { ledger: { readable: false, why: '没给账本' }, journal: { readable: false } };
+    }
+    try {
+      const x = mirasim.crossCheck(meta?.sessionKey || key);
+      return {
+        ledger: x?.ledger || { readable: false, why: '没给账本' },
+        journal: x?.journal || { readable: false },
+      };
+    } catch (e) {
+      return { ledger: { readable: false, why: String(e?.message || e) }, journal: { readable: false } };
+    }
+  }
+  function managedVerdict(view, meta, key) {
+    const record = { ...(meta || {}), backend: meta?.backend || (String(key).startsWith('acp:') ? 'acp' : 'mirasim') };
+    return judgeManagedCompletion(view, record, managedCrossCheck(key, record));
+  }
   function registry() {
     let names;try{names=fs.readdirSync(sessionsDir).filter(n=>n.endsWith('.json')).sort();}catch(e){if(e.code==='ENOENT')return [];throw e;}
     if(names.length>(opts.registryLimit??10000))throw new Error('managed registry limit reached');
@@ -336,7 +387,11 @@ export function createExecutionRuntime(opts={}) {
     try {
       const rt=backend(meta.recordKey,meta);
       started=spec.resumeFrom
-        ? (typeof rt.resumeSession==='function'?await rt.resumeSession(spec.resumeFrom,actual.prompt,{sessionKey:meta.sessionKey}):(()=>{throw Object.assign(new Error('backend does not expose resume'),{detail:{requestSent:false}});})())
+        ? (typeof rt.resumeSession==='function'
+            // 多带 agent/workdir/model：mirasim 的续跑要它们（形态是同一帧 prompt + sessionKey）；
+            // ACP 只读 {sessionKey}，多给的字段被忽略。
+            ? await rt.resumeSession(spec.resumeFrom,actual.prompt,{sessionKey:meta.sessionKey,agent:actual.agent,workdir:actual.workdir,model:actual.model,effort:actual.effort,route:actual.route})
+            : (()=>{throw Object.assign(new Error('backend does not expose resume'),{detail:{requestSent:false}});})())
         : await rt.startSession(actual);
       return await fence(()=>attachAccepted(meta,token,started));
     } catch(error) {
@@ -365,10 +420,10 @@ export function createExecutionRuntime(opts={}) {
     }
     if(initial&&!initial.sessionKey)return {phase:initial.state,text:'',toolCalls:[],missing:false,partial:false,via:'managed-registry',execution:initial,launchUncertain:initial.state==='uncertain'};
     const view=await backend(key,initial).readSession(initial?.sessionKey||key);
+    const verdict=managedVerdict(view, initial, key);
     let result=initial;
     if(initial)result=await fence(()=>{
       const current=metadata(key);if(!current)return null;
-      const verdict=judgeExecutionCompletion(view);
       let state=RESERVED.has(current.state)||current.cleanupVerified?current.state:verdict.status;
       // 快照读不成（unknown）不许把已经落盘的终态改回 unknown，否则死人登记永久占树。
       // #1176 返工实咬：peek 一次就把 completed 写成 unknown，下一跳 startSession 被挡。
@@ -652,7 +707,16 @@ export function createExecutionRuntime(opts={}) {
   }
   async function waitForCompletion(key,{timeoutMs=600000,pollMs=1500}={}) {
     const deadline=now()+timeoutMs;
-    for(;;){const view=await readSession(key),verdict=judgeExecutionCompletion(view);if(!['running','unknown'].includes(verdict.status))return {...verdict,view};if(now()>=deadline)return {status:'unknown',reason:'completion wait timed out',confirmedBy:[],view};await wait(pollMs);}
+    for(;;){
+      const view=await readSession(key);
+      const meta=view.execution||metadata(key);
+      const verdict=managedVerdict(view, meta, key);
+      // unknown 继续轮询（账本可能稍后出现）；到点把最后一次判据原样交出去，
+      // 不要盖成笼统的 timeout——cloud 缺账本的 reason 必须能被看见。
+      if(verdict.status!=='running'&&(verdict.status!=='unknown'||now()>=deadline))return {...verdict,view};
+      if(now()>=deadline)return {status:'unknown',reason:'completion wait timed out',confirmedBy:[],view};
+      await wait(pollMs);
+    }
   }
   async function resumeSession(key,prompt) {
     assertMutationAllowed();const m=metadata(key);if(!m||!m.sessionKey)throw new Error('resume requires confirmed persistent execution metadata');

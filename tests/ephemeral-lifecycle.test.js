@@ -38,6 +38,9 @@ describe('ephemeral-lifecycle', () => {
     const dao = read('scripts/dao.mjs');
     assert.match(dao, /queued-for-review|enqueueOnly:\s*true/);
     assert.match(dao, /stopSessionsAtCwd/);
+    assert.match(dao, /cleanupAfterWorkerDone/);
+    assert.match(dao, /plan\.halt/);
+    assert.equal(/stopSessionsAtCwd\(\s*[\w.]+\s*,\s*process\.cwd\(\)\s*\)/.test(dao), false);
     const i = dao.indexOf('async function cmdWorkerDoneMirasim');
     const body = dao.slice(i, i + 14000);
     assert.match(body, /decideReworkReviewerHandoff/);
@@ -161,6 +164,24 @@ describe('ephemeral-lifecycle', () => {
       exists,
     });
     assert.equal(noCleanupStop.includes('指挥官 stop 候选没认已确认清退证据'), true, JSON.stringify(noCleanupStop));
+
+    const bareCwd = inspectEphemeralLifecycleSources({
+      files: { ...files, dao: `${files.dao}\nstopSessionsAtCwd(bind.runtime, process.cwd())\n` },
+      exists,
+    });
+    assert.equal(bareCwd.includes('worker-done 停会话仍按裸 cwd，没传 PR 身份'), true, JSON.stringify(bareCwd));
+
+    const noHelper = inspectEphemeralLifecycleSources({
+      files: { ...files, dao: files.dao.replace(/cleanupAfterWorkerDone/g, 'cleanupGone') },
+      exists,
+    });
+    assert.equal(noHelper.includes('worker-done 三条收尾没走同一清退函数'), true, JSON.stringify(noHelper));
+
+    const noHalt = inspectEphemeralLifecycleSources({
+      files: { ...files, dao: files.dao.replace(/plan\.halt/g, 'plan.gone') },
+      exists,
+    });
+    assert.equal(noHalt.includes('worker-done 没有预算早退收尾分支'), true, JSON.stringify(noHalt));
   });
 
   it('会话名单超时宽过 8s，避免指挥官把刮名单超时当成没人', () => {

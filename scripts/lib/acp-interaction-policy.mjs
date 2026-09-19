@@ -6,13 +6,47 @@
 
 import path from 'node:path';
 
-/** T1 Cursor/Devin 工作树闭环实际放过的 execute 前缀。不在这里的命令要等人。 */
+/** T1 Cursor/Devin 工作树闭环实际放过的 execute 前缀。不在这里的命令要等人。
+ *
+ * 2026-09-18 补只读巡检一条：fleet 首跑实咬——会话要读代码就得跑 `ls`/`grep`/`cat` 一类命令，
+ * 全在白名单外 → 停在 `waiting_user` 等人回答，无人值守链路上等于卡死。
+ * 补的原则不变：**只放行树内的只读巡检**；碰网络/凭据/装包的（gh、curl、npm install、git push）
+ * 与树外路径一律仍留给人。 */
 export const WORKTREE_EXECUTE_PREFIXES = Object.freeze([
   Object.freeze(['git', 'status']),
   Object.freeze(['git', 'log']),
   Object.freeze(['git', 'add']),
   Object.freeze(['git', 'commit']),
   Object.freeze(['git', 'rev-parse']),
+  Object.freeze(['git', 'diff']),
+  Object.freeze(['git', 'show']),
+  Object.freeze(['git', 'branch']),
+  Object.freeze(['echo']),
+  Object.freeze(['ls']),
+  Object.freeze(['cat']),
+  Object.freeze(['head']),
+  Object.freeze(['tail']),
+  Object.freeze(['wc']),
+  Object.freeze(['grep']),
+  Object.freeze(['rg']),
+  Object.freeze(['find']),
+  Object.freeze(['sed']),
+  Object.freeze(['diff']),
+  Object.freeze(['stat']),
+  Object.freeze(['file']),
+  Object.freeze(['tree']),
+  // `test -f/-d <路径>`：交卷前判断文件在不在是最常见的自查（g2 实咬：工人写完了
+  // README 却卡在 `test -f` 的权限提问上）。参数路径同样受树内约束，见 acp-session-runner。
+  Object.freeze(['test']),
+  Object.freeze(['node', '--test']),
+  // 仓库自己的自检脚本：本仓约定「改完跑 dao-check」（CLAUDE.md 明写），工人读了约定就会跑它。
+  // 拦它 = 每个执行会话都要人放行一次（g4 实咬：composer 工人卡在这一步）。它只跑测试、
+  // 报告落 ~/.dao，不改树；跑不跑由工人自己决定（验收仍由系统的 CI 完成）。
+  Object.freeze(['node', 'scripts/dao-check.mjs']),
+  // 跑仓库自己的测试（改 CI 接线的任务要看测试计数）。**不放 npm ci / npm install**：
+  // 那要联网、有供应链面；装依赖由系统在 prepare 阶段按 lock 做好。
+  Object.freeze(['npm', 'test']),
+  Object.freeze(['npm', 'run']),
 ]);
 
 export const WORKTREE_TOOL_KINDS = Object.freeze(['read', 'edit', 'execute']);

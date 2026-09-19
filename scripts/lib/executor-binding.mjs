@@ -180,6 +180,59 @@ function routeLeg(route) {
 }
 
 /**
+ * 族路由的「腿」（relay/direct）和 execution profile 的 route（local/cloud/auto）
+ * 收成 mirasim / ACP 首帧认的词。认不出就缺省——不许猜一条渠道送出去。
+ * #1174 T6：首帧透传 local/cloud。
+ */
+export function wireExecutionRoute(legOrRoute) {
+  const v = String(legOrRoute || '').trim().toLowerCase();
+  if (v === 'cloud' || v === 'relay') return 'cloud';
+  if (v === 'local' || v === 'direct' || v === 'native') return 'local';
+  if (v === 'auto') return 'auto';
+  return undefined;
+}
+
+/** startSession 首帧上的 profile / 渠道字段。空的键不塞。 */
+export function startSessionRouteFields(route = {}) {
+  if (!route || typeof route !== 'object') return {};
+  const wire = wireExecutionRoute(route.route || route.mode || route.leg);
+  const out = {};
+  if (route.profileId) out.profileId = route.profileId;
+  if (route.backend) out.backend = route.backend;
+  if (wire) out.route = wire;
+  if (route.provider) out.provider = route.provider;
+  if (route.accountPoolId) out.accountPoolId = route.accountPoolId;
+  return out;
+}
+
+/**
+ * 起会话选路：execution profile 优先（ACP / native 都挂在目录上），
+ * 没有命中才掉回模型前缀族。composer-2.5 若先走前缀会变成 pi——正是 T6 要堵的洞。
+ */
+export function resolveWorkerStartRoute({ runtime, policy, spec = {} } = {}) {
+  const model = spec.model;
+  const profile = model && typeof runtime?.profileForModel === 'function'
+    ? runtime.profileForModel(model)
+    : null;
+  if (profile && profile.agent) {
+    return {
+      ok: true,
+      via: 'execution profile',
+      family: profile.modelFamily || null,
+      agent: profile.agent,
+      leg: profile.route || null,
+      mode: profile.route || null,
+      backend: profile.backend || null,
+      profileId: profile.id,
+      provider: profile.provider || spec.provider || null,
+      accountPoolId: profile.accountPoolId || null,
+      route: profile.route || null,
+    };
+  }
+  return judgeAgentRoute({ policy, model, provider: spec.provider });
+}
+
+/**
  * 按族定 mirasim 上跑哪个执行体 agent、走哪条腿。
  *
  * 两种调用：
@@ -336,7 +389,7 @@ export function createMirasimBinding({ runtime, policy, runtimeOpts, attachHooks
       };
     },
     async workerStart(spec = {}) {
-      const route = judgeAgentRoute({ policy, model: spec.model, provider: spec.provider });
+      const route = resolveWorkerStartRoute({ runtime: rt, policy, spec });
       if (!route.ok) return { ok: false, executor: 'mirasim', refused: true, error: route.error, family: route.family ?? null };
       const workdir = String(spec.workdir || '').trim();
       const prompt = String(spec.prompt || '');
@@ -353,7 +406,11 @@ export function createMirasimBinding({ runtime, policy, runtimeOpts, attachHooks
       }
       // #884 审官 P1#2：model 在上一行算出来却不往下传 = 服务端永远收不到具体模型，
       // 而回执里的 daoModel 只是同一个变量抄了一遍，证明不了「发过」。
-      const started = await rt.startSession({ agent: route.agent, workdir, prompt, model: spec.model || undefined });
+      // #1174 T6：profile / 腿上的 local·cloud 也要进首帧，否则 ACP/native 掉回前缀族。
+      const started = await rt.startSession({
+        agent: route.agent, workdir, prompt, model: spec.model || undefined,
+        ...startSessionRouteFields(route),
+      });
       return {
         ok: true,
         executor: 'mirasim',
@@ -364,12 +421,13 @@ export function createMirasimBinding({ runtime, policy, runtimeOpts, attachHooks
         family: route.family,
         leg: route.leg,
         mode: route.mode,
+        via: route.via,
         daoModel: spec.model ?? null,
         native: started,
       };
     },
     async dispatchOne(spec = {}) {
-      const route = judgeAgentRoute({ policy, model: spec.model, provider: spec.provider });
+      const route = resolveWorkerStartRoute({ runtime: rt, policy, spec });
       if (!route.ok) return { ok: false, executor: 'mirasim', refused: true, error: route.error, family: route.family ?? null };
       const tree = await this.worktreeCreate({ repo: spec.repo, branch: spec.branch });
       if (!tree.ok) return { ok: false, executor: 'mirasim', error: tree.error, stage: 'worktree' };

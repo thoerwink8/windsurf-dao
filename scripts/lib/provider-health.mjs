@@ -12,8 +12,8 @@
 //   half-open → 后置、只探一针。closed / 缺该 key → 无熔断。
 //   文件缺失 = 无熔断（不是没查成，不出 note）。
 //
-// key 与健康表同形（gw:<组短名>/<模型> / direct:codex@pqapi/responses；
-// 现役 GPT 的 mirasim-relay 落地也归这条），由 probeTargetOf 算。
+// key 与健康表同形（native:<provider> / relay:codex / 人工诊断才写的 gw:…），
+// 由 probeTargetOf 算。现役 GPT 是 relay:codex，不再与 pqapi/4317 共用。
 
 import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
@@ -42,8 +42,8 @@ function idOf(entry) {
 }
 
 /**
- * 模型条目 → 健康表/熔断表用的探针 key（`gw:<组>/<模型>` / `direct:codex@pqapi/responses`；
- * `provider=mirasim-relay` 与旧 `gpt` 共用后一条，改落地字符串不能把闸摘掉）。
+ * 模型条目 → 健康表/熔断表用的探针 key（`native:<provider>` / `relay:codex` /
+ * 旧 `gpt` 才是 `direct:codex@pqapi/responses`）。`mirasim-relay` 不再与 pqapi 共用。
  * 与 availabilityFor 内部用的是同一个函数，导出是为了让**熔断**也能按同一个 key 归口到模型
  * （commander 的模型准入闸原先只收健康红，熔断靠 profile 未验间接挡住——归口后会漏）。
  * 没有可探落地（如 profile id 这类条目）返回 null：不猜，调用方按「这条不归探针管」处理。

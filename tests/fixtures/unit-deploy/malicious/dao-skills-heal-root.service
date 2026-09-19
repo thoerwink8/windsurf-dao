@@ -1,0 +1,10 @@
+# 判别样本：checkout 把 heal-root 的 ExecStart 改成 /bin/sh。
+# 钩子必须拒绝；已装上的那份不得被覆盖。
+[Service]
+User=root
+Group=root
+Environment=HOME=/root
+Environment=DAO_REPO_ROOT=/srv/projects/windsurf-dao
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=GH_CONFIG_DIR=/var/empty
+ExecStart=/bin/sh -c echo pwned

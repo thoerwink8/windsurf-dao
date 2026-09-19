@@ -21,6 +21,11 @@ export function inspectEphemeralLifecycleSources({ files = {}, exists = () => fa
   const sessions = files.sessions || '';
 
   if (dao && !/stopSessionsAtCwd/.test(dao)) problems.push('worker-done 热路没调 session-stop');
+  if (dao && /stopSessionsAtCwd\(\s*[\w.]+\s*,\s*process\.cwd\(\)\s*\)/.test(dao)) {
+    problems.push('worker-done 停会话仍按裸 cwd，没传 PR 身份');
+  }
+  if (dao && !/cleanupAfterWorkerDone/.test(dao)) problems.push('worker-done 三条收尾没走同一清退函数');
+  if (dao && !/plan\.halt/.test(dao)) problems.push('worker-done 没有预算早退收尾分支');
   if (dao && !(/queued-for-review/.test(dao) || /enqueueOnly:\s*true/.test(dao))) problems.push('worker-done 没入队');
   if (core && !/'reap-tree'/.test(core)) problems.push('指挥官动作表没有 reap-tree');
   if (commander && !/execReapTree/.test(commander)) problems.push('指挥官没有清树执行函数');

@@ -1,0 +1,4 @@
+{
+  "budget": 1,
+  "why": "reviewer-create --dry-run 必须真走 dao.mjs 才能看见新席位进选型。"
+}

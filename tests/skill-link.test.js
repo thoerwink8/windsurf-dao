@@ -25,7 +25,11 @@ const fs = require("fs");
 const path = require("path");
 
 const REPO = path.resolve(__dirname, "..");
-const SANDBOX = path.join(REPO, "_tmp", "skilllink-sandbox");
+// 沙盒名带进程号：两份 dao-check 并发时同名沙盒会互删（#1358）
+fs.mkdirSync(path.join(REPO, "_tmp"), { recursive: true });
+const SANDBOX = fs.mkdtempSync(path.join(REPO, "_tmp", "skilllink-sandbox-"));
+// 名字独占之后没人替它清了（原先靠下一次运行的 rmSync 顶掉同名目录），退出时自己收
+process.on("exit", () => { try { fs.rmSync(SANDBOX, { recursive: true, force: true }); } catch { /* 收尾失败不该改退出码 */ } });
 // 「目标/root 不在任何 git 仓内」样本必须放在仓外：_tmp 在仓内，向上探测会撞上本仓的 .git
 // （common-dir 相同 → 误判成同仓）。放系统临时目录才能拿到真的「无 .git 可解」。
 const OUTSIDE = path.join(require("os").tmpdir(), `skilllink-outside-${process.pid}`);
@@ -495,6 +499,47 @@ describe('skill-link', () => {
     });
     assert.equal(miss.ok, false, 'passwd 没有且 USERPROFILE 不是绝对路径 ⇒ 没查成  →  ' + JSON.stringify(miss));
     assert.match(miss.reason, /passwd|HOME|USERPROFILE/);
+  });
+
+  it('DAO_SKILL_HOMES 覆盖值：Windows 盘符整段保留，逗号/分号/POSIX 冒号仍是分隔（#1330）', async () => {
+    const { splitHomeOverride, agentHomes } = await import('../scripts/lib/skill-homes.mjs');
+    assert.deepEqual(splitHomeOverride('C:/Users/alice'), ['C:/Users/alice'], '正斜杠盘符不得拆成 C 和 /Users/alice');
+    assert.deepEqual(splitHomeOverride('C:\\Users\\bob'), ['C:\\Users\\bob'], '反斜杠盘符不得拆成 C 和 \\Users\\bob');
+    assert.deepEqual(splitHomeOverride('C:/Users/alice,D:/Users/bob'), ['C:/Users/alice', 'D:/Users/bob']);
+    assert.deepEqual(splitHomeOverride('C:\\Users\\alice;C:\\Users\\bob'), ['C:\\Users\\alice', 'C:\\Users\\bob']);
+    assert.deepEqual(splitHomeOverride('/home/a:/home/b'), ['/home/a', '/home/b'], 'POSIX 冒号列表仍拆两项');
+    assert.deepEqual(splitHomeOverride('/home/a,/home/b'), ['/home/a', '/home/b']);
+    assert.deepEqual(splitHomeOverride('C:/Users/alice:/home/bob'), ['C:/Users/alice', '/home/bob']);
+
+    const enoent = () => {
+      const e = new Error('ENOENT');
+      e.code = 'ENOENT';
+      throw e;
+    };
+    const only = (want, entries) => (dir) => {
+      if (dir === want) return entries;
+      const e = new Error('ENOENT');
+      e.code = 'ENOENT';
+      throw e;
+    };
+
+    const slash = 'C:/Users/alice';
+    const win = agentHomes({
+      env: { DAO_SKILL_HOMES: slash },
+      readFile: enoent,
+      readdir: only(slash, ['.claude', 'Desktop']),
+    });
+    assert.equal(win.ok, true, 'C:/ 覆盖值必须整段进候选  →  ' + JSON.stringify(win));
+    assert.deepEqual(win.homes, [slash]);
+
+    const backslash = 'C:\\Users\\bob';
+    const winBs = agentHomes({
+      env: { DAO_SKILL_HOMES: backslash },
+      readFile: enoent,
+      readdir: only(backslash, ['.claude']),
+    });
+    assert.equal(winBs.ok, true, 'C:\\ 覆盖值必须整段进候选  →  ' + JSON.stringify(winBs));
+    assert.deepEqual(winBs.homes, [backslash]);
   });
 
   it('硬塞一个只有 .mirasim/ 的家进检查 ⇒ SKIP 不是红，也不造 .claude/skills', async () => {

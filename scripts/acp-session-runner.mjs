@@ -78,7 +78,10 @@ function canonicalPath(value, cwd) {
 // unquoted word, or expansion-capable ($ ` \) inside double quotes. Inside quotes
 // the rest are literal text, so a commit trailer such as "Name <a@b.c>" is data,
 // not an operator, and rejecting it would block ordinary git usage.
-const UNQUOTED_UNSAFE = /[$`\\;&|<>(){}*?\[\]~!]/;
+// `~` 不在这里：它只在**词首**才展开成家目录（`~/x`、`~user`），词中/词尾的
+// `HEAD~2` 是字面量。整词一律拒 `~` 会把 `git diff HEAD~2` 这类常见只读命令
+// 整句拒掉（复核会话实咬）。词首 `~` 在 commandWords 里单独拒。
+const UNQUOTED_UNSAFE = /[$`\\;&|<>(){}*?\[\]!]/;
 const DOUBLE_QUOTED_UNSAFE = /[$`\\]/;
 
 /** Cursor writes every non-trivial commit message as `"$(cat <<'EOF' … EOF)"`.
@@ -99,6 +102,41 @@ export function liftLiteralHeredocs(line) {
 }
 const restoreHeredocs = (word, literals) =>
   word.replace(/\u0000H(\d+)\u0000/g, (match, index) => literals[Number(index)] ?? match);
+/** 把一行 shell 拆成 `&&` / `;` / `|` / `||` 分隔的段，**引号内的分隔符不算**（如 `-m "a;b"` 是内容）。
+ *  分段符只决定「在哪切」：每一段仍要各自命中白名单前缀并留在树内，所以管道不是绕过面——
+ *  `git log | head -3` 两段都合法才放行，`git log | curl http://x` 因 curl 不在白名单整句被拒。
+ *  其余重定位/替换（> < & $( ) 反引号）仍由 commandWords 逐词拒绝。 */
+export function splitCommandSegments(line) {
+  const out = [];
+  let current = '';
+  let quote = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quote) {
+      current += ch;
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; current += ch; continue; }
+    if (ch === ';') { out.push(current); current = ''; continue; }
+    if (ch === '&' && line[i + 1] === '&') { out.push(current); current = ''; i += 1; continue; }
+    if (ch === '|') { out.push(current); current = ''; if (line[i + 1] === '|') i += 1; continue; }
+    current += ch;
+  }
+  out.push(current);
+  return out.map(part => part.trim()).filter(Boolean);
+}
+
+/** `2>/dev/null` / `>/dev/null` / `&>/dev/null` / `2>&1`：把输出扔掉或把 stderr 并进 stdout——
+ *  都是**无副作用**的重定位（不写盘、不改变读什么）。真实会话几乎每条 `ls`/`find` 都带它们，
+ *  整句被拒会把只读巡检变成权限提问（断链自愈：复核会话实咬 4 次）。只认这几个字面形态；
+ *  `> file`、`>> file` 等写重定向仍由 commandWords 拒绝。 */
+export function stripNullRedirects(line) {
+  return String(line)
+    .replace(/(^|\s)(?:&|[0-9]?)>\s*\/dev\/null/g, '$1')
+    .replace(/(^|\s)2>&1\b/g, '$1');
+}
+
 function commandWords(input) {
   if (Array.isArray(input)) return input.length && input.every(word => typeof word === 'string') ? input : null;
   if (typeof input !== 'string' || /[\r\n]/.test(input)) return null;
@@ -130,6 +168,9 @@ function commandWords(input) {
       if (offset >= input.length || /\s/.test(input[offset])) break;
     }
     if (!matched) return null; // an unterminated quote reaches here
+    // 词首 `~` 会被 shell 展开成家目录（`~/x`、`~user`、`~+`）——那是树外路径，一律拒。
+    // 词中/词尾（`HEAD~2`）不展开，交给上面的 UNQUOTED_UNSAFE 之外的分支正常处理。
+    if (word.startsWith('~')) return null;
     words.push(word);
   }
   return words.length ? words : null;
@@ -200,6 +241,43 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
     if (!Array.isArray(rule.commandPrefixes) || !rule.commandPrefixes.length) return null;
     const allowed = words => rule.commandPrefixes.some(prefix =>
       Array.isArray(prefix) && prefix.length && prefix.every((word, index) => typeof word === 'string' && word === words[index]));
+    // 前缀只判命令名、不看参数：`cat /home/orca/.dao/apps/marshal.json` 会因 `cat` 命中前缀
+    // 而被自动放行——那是读树外凭据，不是树内巡检（2026-09-18 发现）。字面参数里带 `/` 或
+    // `..` 的按路径判：解析后必须留在树内；`~`/`$` 展开已由 commandWords 拒绝。
+    // 逐词判路径：
+    //  · 纯旗标不是路径；但要防「值紧贴在短选项后」——`-f/etc/passwd`、`-ivnf/etc/passwd`
+    //    （多字母簇）都在**选项部分**（第一个空白之前）里找首个 `/` 或 `..`，从那里取候选。
+    //    只看选项部分是为了不误杀引号内的内容（`-m"fix a /b bug"` 里的 `/b` 是数据）。
+    //  · 其余词一律 canonicalPath（跟符号链接）：树内 symlink 指向树外（`leak -> /etc`）也要拒。
+    const resolvesInside = value => {
+      const resolved = canonicalPath(value, cwd);
+      return resolved !== null && (resolved === cwd || resolved.startsWith(cwd + path.sep));
+    };
+    const inTree = words => words.every(word => {
+      // heredoc 提升出来的占位符（\0H<n>\0）是**消息文本**，不是路径：canonicalPath 见到 NUL 会
+      // 判 null，不跳过就会把 `git commit -m "$(cat <<'EOF' … EOF)"` 整句拒掉（CI 实咬）。
+      if (word.includes('\u0000')) return true;
+      if (word.startsWith('--')) {
+        if (!word.includes('=')) return true;
+        return resolvesInside(word.slice(word.indexOf('=') + 1));
+      }
+      if (word.startsWith('-') && word.length > 1) {
+        // 短选项簇可能把值紧贴在字母后，两种附着都要查：
+        //  · 路径型（`-f/etc/passwd`、`-ivnf/etc/passwd`）：找首个 `/` 或 `..`，从那里取候选；
+        //  · bare 名型（`-fleak`）：簇里没有 `/` 时，逐个后缀当文件名判——树内 symlink 指向树外
+        //    的 `-fleak` 也要拒（复核实咬的相邻缝）。
+        const option = word.split(/\s/, 1)[0].slice(1);
+        for (let j = 1; j < option.length; j += 1) {
+          if (option[j] === '/' || option.startsWith('..', j)) return resolvesInside(option.slice(j));
+        }
+        for (let j = 1; j < option.length; j += 1) {
+          const tail = option.slice(j);
+          if (/^[\w.-]+$/.test(tail) && !resolvesInside(tail)) return false;
+        }
+        return true;
+      }
+      return resolvesInside(word);
+    });
     if (!worktree) {
       if (actualCwd === undefined) return null;
       const words = commandWords(raw.argv ?? raw.command);
@@ -222,21 +300,29 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
     if (line === null && typeof call.title === 'string') line = call.title.trim().replace(/^`(.*)`$/s, '$1');
     if (Array.isArray(line)) {
       const words = commandWords(line);
-      return words && allowed(words) && actualCwd !== undefined ? { ...scope, command: words, permission: 'worktree_scoped' } : null;
+      return words && allowed(words) && inTree(words) && actualCwd !== undefined ? { ...scope, command: words, permission: 'worktree_scoped' } : null;
     }
     if (typeof line !== 'string' || !line.trim()) return null;
-    // Only `&&` may join segments. Every other operator (| < > & ; and any
-    // substitution) is refused by commandWords below, because it rejects an
-    // unquoted metacharacter in any word of a segment.
-    const { lifted, literals } = liftLiteralHeredocs(line);
-    const segments = lifted.split(/\s*&&\s*/).filter(part => part.trim());
+    // Only `&&` / `;` / `|` / `||` may join segments（每段各自过白名单与树内检查）。
+    // Every other operator (< > & and any substitution) is refused by commandWords below,
+    // because it rejects an unquoted metacharacter in any word of a segment.
+    // `/dev/null` 重定位先摘掉：它无副作用（只丢输出），不摘会把常见只读命令整句拒掉。
+    const { lifted, literals } = liftLiteralHeredocs(stripNullRedirects(line));
+    // `;` 与 `&&` 同等对待：都只是分段符，每段仍要各自命中前缀白名单。
+    // 2026-09-18 实咬：只认 `&&` 时，`git log …; ls …` 这类复合只读命令整句被拒，
+    // 而报错还把已在白名单里的 git 命令列成「不在白名单」——真因被盖住，会话停在 waiting_user。
+    // 必须**引号感知**：引号里的 `;`（如 `-m "a;b"`）是内容不是分隔符。
+    const segments = splitCommandSegments(lifted);
     if (!segments.length) return null;
     const parsed = [];
     for (const segment of segments) {
       const words = commandWords(segment);
       if (!words) return null;
       if (words[0] === 'cd') {
-        if (words.length !== 2 || canonicalPath(words[1], cwd) !== cwd) return null;
+        // 只许 cd 进**本树**（含子目录）：`cd <树>/packages/fleet && npm test` 是正常巡检，
+        // 早先只认树根，导致这类命令整句被拒（g21 实咬）。树外路径一律拒。
+        const target = words.length === 2 ? canonicalPath(words[1], cwd) : null;
+        if (!target || !(target === cwd || target.startsWith(cwd + path.sep))) return null;
       } else {
         // `git -C <dir> <subcommand>` names its own directory; that directory must be
         // the managed workdir, and the prefix is matched against the command without
@@ -247,6 +333,7 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
           effective = [words[0], ...words.slice(3)];
         }
         if (!allowed(effective)) return null;
+        if (!inTree(words)) return null;
       }
       parsed.push(words.map(word => restoreHeredocs(word, literals)));
     }

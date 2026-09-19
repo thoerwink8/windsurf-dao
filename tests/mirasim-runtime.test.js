@@ -162,6 +162,52 @@ describe('契约断言', () => {
     assert.strictEqual(sentPrompt.effort, 'low');
   });
 
+  it('#1174 T6 首帧透传 local / cloud，auto 不发具体渠道', async () => {
+    const run = async (route) => {
+      const wire = fakeWire(goodState(), f => (f.type === 'prompt'
+        ? [{ type: 'accepted', sessionKey: KEY, taskId: 't-route' }] : []));
+      const rt = await runtimeWith(wire);
+      await rt.startSession({ agent: 'claude', workdir: '/srv/work', prompt: 'x', route });
+      return wire.sent.find(f => f.type === 'prompt');
+    };
+    assert.strictEqual((await run('cloud')).route, 'cloud');
+    assert.strictEqual((await run('local')).route, 'local');
+    assert.strictEqual((await run('auto')).route, null);
+    const omitted = await run(undefined);
+    assert.equal(Object.prototype.hasOwnProperty.call(omitted, 'route'), false);
+  });
+
+  it('续跑（continue）：同一帧 prompt 带上已有 sessionKey，回同一个 key 才算续上', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'prompt'
+      ? [{ type: 'accepted', sessionKey: KEY, taskId: 'task-cont' }] : []));
+    const rt = await runtimeWith(wire);
+    const r = await rt.resumeSession(KEY, '继续：只回 PONG', { agent: 'claude', workdir: '/srv/work' });
+    assert.strictEqual(r.sessionKey, KEY);
+    assert.strictEqual(r.continued, true);
+    const sent = wire.sent.find(f => f.type === 'prompt');
+    // 2026-09-19 回环 ws 实测：形态就是 prompt + sessionKey；独立 continue 帧与 continueFrom 字段都不认。
+    assert.strictEqual(sent.sessionKey, KEY);
+    assert.strictEqual(sent.agent, 'claude');
+    assert.strictEqual(sent.workdir, '/srv/work');
+  });
+
+  it('续跑回的不是同一个 key：按没续上 fail-close', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'prompt'
+      ? [{ type: 'accepted', sessionKey: 'claude:00000000-0000-0000-0000-000000000000', taskId: 't' }] : []));
+    const rt = await runtimeWith(wire);
+    await assert.rejects(
+      () => rt.resumeSession(KEY, '继续', { agent: 'claude', workdir: '/srv/work' }),
+      /不同的 sessionKey/,
+    );
+  });
+
+  it('续跑缺 agent/workdir 直接拒（执行记录里有，不该猜）', async () => {
+    const wire = fakeWire(goodState(), () => []);
+    const rt = await runtimeWith(wire);
+    await assert.rejects(() => rt.resumeSession(KEY, '继续', { agent: 'claude' }), /agent \/ workdir/);
+    assert.strictEqual(wire.sent.filter(f => f.type === 'prompt').length, 0, '拒了就不许发 prompt');
+  });
+
   it('应答帧的 sessionKey 形状不对：判契约不符，不硬着头皮往下走', async () => {
     const wire = fakeWire(goodState(), f => (f.type === 'prompt'
       ? [{ type: 'accepted', sessionKey: 'a8d67849', taskId: '' }] : []));
@@ -363,6 +409,31 @@ describe('判完工交叉核', () => {
     });
     assert.strictEqual(v.status, 'unknown');
     assert.match(v.reason, /没查成/);
+  });
+
+  it('#1174 T6：direct/local/ACP 快照 done 不要求 relay 账本；cloud 仍要', async () => {
+    const { judgeCompletion, completionSkipsRelayLedger } = await import(LIB);
+    const missing = { readable: false, rows: [], why: '这个会话还没有账本目录' };
+    const doneView = { phase: 'done', text: 'PONG', toolCalls: [], error: null };
+    assert.equal(completionSkipsRelayLedger({ route: 'local' }), true);
+    assert.equal(completionSkipsRelayLedger({ route: 'direct' }), true);
+    assert.equal(completionSkipsRelayLedger({ backend: 'acp' }), true);
+    assert.equal(completionSkipsRelayLedger({ route: 'cloud' }), false);
+    assert.equal(completionSkipsRelayLedger({}), false);
+    const local = judgeCompletion({ view: doneView, ledger: missing, since: T0, route: 'local' });
+    assert.strictEqual(local.status, 'done');
+    assert.deepStrictEqual(local.confirmedBy, ['snapshot']);
+    assert.match(local.reason, /不经 relay/);
+    const acp = judgeCompletion({ view: doneView, ledger: missing, since: T0, backend: 'acp' });
+    assert.strictEqual(acp.status, 'done');
+    const cloud = judgeCompletion({ view: doneView, ledger: missing, since: T0, route: 'cloud' });
+    assert.strictEqual(cloud.status, 'unknown');
+    assert.match(cloud.reason, /没查成/);
+    const killed = judgeCompletion({
+      view: { phase: 'done', text: '半截', error: 'pi turn stalled past 30 minutes' },
+      ledger: missing, since: T0, route: 'local',
+    });
+    assert.strictEqual(killed.status, 'failed');
   });
 
   it('快照 done 但账本里没有起针后的行 → 两边不一致，判没查成', async () => {
@@ -951,6 +1022,100 @@ describe('#1125 listSessions：会话名单是第六个动词', () => {
     const rt = await runtimeWith(wire);
     await assert.rejects(rt.startSession({ agent: 'claude', workdir: '/tmp/dao-fake', prompt: 'fixture', clientRef: 'lost-ack' }), e => e.detail.launchUncertain === true && e.detail.clientRef === 'lost-ack');
     assert.equal(wire.sent.filter(f => f.type === 'prompt').length, 1);
+  });
+});
+
+describe('#1336 会话清单坏条目 fail-closed', () => {
+  const BAD = { state: 'running', workdir: '/w/bad', open: true };
+
+  it('最小反例：缺 sessionKey 的 running 条目 → 整份没查成', async () => {
+    const { judgeSessionList } = await import(LIB);
+    const r = judgeSessionList([BAD]);
+    assert.equal(r.ok, false);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.sessions, null);
+    assert.match(r.why, /sessionKey/);
+  });
+
+  it('非对象 / 不是数组的清单同样整份没查成', async () => {
+    const { judgeSessionList } = await import(LIB);
+    assert.equal(judgeSessionList(null).ok, false);
+    assert.equal(judgeSessionList([null]).unscanned, true);
+    assert.equal(judgeSessionList(['x']).sessions, null);
+    assert.equal(judgeSessionList([[]]).ok, false);
+  });
+
+  it('空串 / 空白 sessionKey 也算缺合法 key', async () => {
+    const { judgeSessionList } = await import(LIB);
+    assert.equal(judgeSessionList([{ sessionKey: '' }]).ok, false);
+    assert.equal(judgeSessionList([{ sessionKey: '   ' }]).ok, false);
+  });
+
+  it('混进一条坏的，好的那条也不能当查成', async () => {
+    const { judgeSessionList } = await import(LIB);
+    const r = judgeSessionList([
+      { sessionKey: KEY, state: 'running', workdir: '/w/good' },
+      BAD,
+    ]);
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+  });
+
+  it('空名单是查成了的 0 条，不是没查成', async () => {
+    const { judgeSessionList } = await import(LIB);
+    const r = judgeSessionList([]);
+    assert.equal(r.ok, true);
+    assert.equal(r.unscanned, false);
+    assert.deepEqual(r.sessions, []);
+  });
+
+  it('正常 running/finished 原样交出，stop/GC 仍看得见 key 和 workdir', async () => {
+    const { judgeSessionList } = await import(LIB);
+    const sessions = [
+      { sessionKey: KEY, state: 'running', workdir: '/w/live', open: true },
+      { sessionKey: 'codex:dead', state: 'completed', workdir: '/w/done', open: false },
+    ];
+    const r = judgeSessionList(sessions);
+    assert.equal(r.ok, true);
+    assert.equal(r.unscanned, false);
+    assert.deepEqual(r.sessions, sessions);
+  });
+
+  it('listSessions 动词：坏条目 → missing + sessions null', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{
+      type: 'sessions',
+      sessions: [BAD],
+      hasMore: false,
+    }] : []));
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.missing, true);
+    assert.equal(r.unscanned, true);
+    assert.equal(r.sessions, null);
+    assert.match(r.why, /sessionKey/);
+  });
+
+  it('分页中途遇到坏条目立刻没查成，不继续扩大 limit', async () => {
+    const wire = fakeWire(goodState(), f => f.type === 'listSessions' ? [{
+      type: 'sessions',
+      sessions: [BAD],
+      hasMore: true,
+    }] : []);
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, false);
+    assert.equal(r.sessions, null);
+    assert.equal(wire.sent.filter(f => f.type === 'listSessions').length, 1);
+  });
+
+  it('listSessions 动词：正常条目仍 ok 原样交出', async () => {
+    const sessions = [
+      { sessionKey: KEY, state: 'running', workdir: '/w/live' },
+      { sessionKey: 'codex:dead', state: 'completed', workdir: '/w/done' },
+    ];
+    const wire = fakeWire(goodState(), f => (f.type === 'listSessions' ? [{ type: 'sessions', sessions, hasMore: false }] : []));
+    const r = await (await runtimeWith(wire)).listSessions();
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.sessions, sessions);
   });
 });
 

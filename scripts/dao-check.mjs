@@ -122,6 +122,11 @@
 //    正当做法：代码写文件（`node /tmp/x.mjs`）、正文写文件（`--body-file`）。
 //    单引号无 `$` 不报（红得没道理的闸会被关掉）；node_modules 不扫。检查器自持解析，
 //    不 import 任何 shell/网关解析器。红/绿/空样本各一验判别力；0 份文本 = 没查成。
+// ㊳ 单元已上机 + 活日历不撞点（#1408）：仓内 host/machine/systemd 的契约字段
+//    （OnCalendar / User / ExecStart / Environment / ReadWritePaths）必须与
+//    /etc 那份 fragment 一致；活 heal-root 与活 dao-sync 的 OnCalendar 展开
+//    相交必须为空。读不到 = 没查成，不是「一致」也不是「不撞」。
+//    不比 drop-in 全文（那是 ⑳ 被故意配置钉红的病）。红/绿/空夹具验判别力。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -187,6 +192,11 @@ import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
 import {
+  inspectUnitDeployFixtures, inspectFragmentDirs, classifyHealSyncOverlap,
+  parseOnCalendar, UNIT_DIR_REL, LIVE_UNIT_DIR, HEAL_ROOT_TIMER, SYNC_TIMER,
+  INSTALL_HINT,
+} from './lib/unit-deploy-check.mjs';
+import {
   inspectInlineScripts, inspectInlineScriptsFixtures, listScanFiles, isSamplePath,
 } from './lib/inline-script-check.mjs';
 import { classifyFailedUnits, repoScriptOf, hasEverRun } from './lib/failed-units-check.mjs';
@@ -212,7 +222,7 @@ import {
 } from './lib/marshal-selfmerge-check.mjs';
 import { defaultHome } from './lib/dao-memory-link-check.mjs';
 import { scanMirasimTrees } from './lib/mirasim-trees.mjs';
-import { classifySpawnBudget, countSpawnCalls } from './lib/spawn-budget.mjs';
+import { classifySpawnBudget, collectSpawnBudgetInputs } from './lib/spawn-budget.mjs';
 import { classifyAssertStyle } from './lib/assert-style.mjs';
 import {
   inspectTestExecutorIsolationFixtures, inspectTestExecutorIsolationLive,
@@ -223,6 +233,7 @@ import {
   checkRetiredVerbAdvert, inspectRetiredVerbAdvertFixtures,
 } from './lib/retired-verb-advert-check.mjs';
 import { classifyLaunchBinaries, resolveProbePath, deploymentHostPresence, DEPLOY_UNIT_DIR } from './lib/launch-binary.mjs';
+import { tapFailuresEvidence } from './lib/tap-failures.mjs';
 
 const require = createRequire(import.meta.url);
 // 标准 TOML 解析器（smol-toml，BSD-3，TOML 1.0 兼容，vendored 进 scripts/lib/smol-toml.cjs）。
@@ -244,22 +255,8 @@ function fail(what, howToFix, evidence) {
 function green(line) { greens.push(line); }
 function skip(line) { skips.push(line); }
 
-/** 取测试失败行：只认 TAP 的 not ok 行（node --test 的输出形态），不按关键词匹配——
- * 测试名里带 fail/错误/红 字样的 ok 行不许冒充失败证据（#566 排查实证）。
- * 一套红多条就全列，不许只报第一条（只报头一条会让人以为修完就绿了，然后再红一轮）。
- * 退出非 0 却没标准 not ok 行 = 崩了/格式变了：返回 null，证据说「没查成」，不许拿别的行冒充。 */
-function extractFailLines(output) {
-  const lines = String(output || '').split(/\r?\n/);
-  const fails = lines.filter(l => /^\s*not ok /.test(l));
-  if (fails.length) return fails.map(l => l.trim().replace(/^not ok \d+ - /, '').slice(0, 200));
-  return null;
-}
-
-function failLinesEvidence(output) {
-  const fails = extractFailLines(output);
-  if (fails) return `测试输出 ${fails.length} 条红：\n${fails.join('\n')}`;
-  return '退出非 0 但没扫到标准 not ok 行——测试崩了或输出格式变了，本次没查成，需人工复现';
-}
+// 测试红的证据（哪几条、各自为什么）在 scripts/lib/tap-failures.mjs：随机红当场那份输出是唯一现场，
+// 只留测试名不留断言正文会让人只能重猜（#1358）。
 
 /** 从 node --test 的 TAP 汇总抽计数（#608：自造 check() runner 退役，改 node:test）。
  * 每个检查必须自带「零样本报红」：tests=0 就报红。「数到 0」和「没看到样本」输出一样，
@@ -457,7 +454,7 @@ async function runTests() {
         green(`测试 ${f}（${tap.pass ?? '?'} 过 / ${tap.fail ?? 0} 红 / ${tap.skipped ?? 0} 跳过 / ${tap.tests} 条）`);
       }
     } else {
-      fail(`测试红：${f}`, `复现：node --test tests/${f}`, failLinesEvidence(out));
+      fail(`测试红：${f}`, `复现：node --test tests/${f}`, tapFailuresEvidence(out));
     }
   }
   reportTestDurations(results.map(({ f, ms }) => ({ file: f, ms })));
@@ -528,18 +525,18 @@ function reportTestDurations(durations) {
 /** 测试里起子进程的总量闸——「TIA 第二刀没做完」的报警器（scripts/lib/spawn-budget.mjs）。 */
 function checkSpawnBudget() {
   const dir = join(ROOT, 'tests');
-  let counts;
-  try {
-    counts = readdirSync(dir).filter(f => /\.test\.(js|mjs|cjs)$/i.test(f))
-      .map(f => ({ file: f, count: countSpawnCalls(readFileSync(join(dir, f), 'utf8')) }));
-  } catch (e) {
-    fail('spawn 预算没查成', '读不到 tests/ 目录', String(e.message || e));
-    return;
-  }
-  const r = classifySpawnBudget(counts);
+  const collected = collectSpawnBudgetInputs(dir);
+  const r = classifySpawnBudget(collected);
   if (r.state === 'ok') green(`spawn 预算：${r.detail}`);
-  else if (r.state === 'red') fail('测试起子进程超预算', '把 spawn 改成进程内调用（TIA 第二刀），或显式降/调预算并说明', r.detail);
-  else fail('spawn 预算没查成', '扫描面坏了——不是「没有 spawn」', r.detail);
+  else if (r.state === 'red') {
+    fail(
+      '测试起子进程超预算或未声明',
+      '给对应测试写/改 *.spawn-budget.json（budget + why），或把调用改成进程内（TIA 第二刀）。不许按实际数量自动放宽',
+      r.detail,
+    );
+  } else {
+    fail('spawn 预算没查成', '扫描面坏了或声明 JSON 读不成——不是「没有 spawn」', r.detail);
+  }
 }
 
 /** 读禁网闸的账：测试期有没有谁试图连外网。拦下不等于报警——调用方常把网络错吞了。 */
@@ -2212,6 +2209,8 @@ checkDispatchPolicySamples();
 checkDispatchPolicyLive();
 checkUnitRestartSamples();
 checkUnitRestartLive();
+checkUnitDeploySamples();
+checkUnitDeployLive();
 checkInlineScriptSamples();
 checkInlineScriptLive();
 checkFailedUnitsLive();
@@ -2300,6 +2299,88 @@ function checkUnitRestartLive() {
     return;
   }
   green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
+}
+
+function checkUnitDeploySamples() {
+  const r = inspectUnitDeployFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '单元上机闸样本没查成' : '单元上机闸样本对不上',
+      '恢复 tests/fixtures/unit-deploy/{red,ok,empty}：红=仓内 OnCalendar 与活单元不同必须拦、绿必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`单元上机闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function readLiveUnitText(name) {
+  const cat = spawnSync('systemctl', ['cat', name], {
+    encoding: 'utf8', timeout: 8000, windowsHide: true,
+  });
+  if (!cat.error && cat.status === 0 && String(cat.stdout || '').trim()) {
+    return { ok: true, text: String(cat.stdout), via: 'systemctl cat' };
+  }
+  const p = join(LIVE_UNIT_DIR, name);
+  try {
+    return { ok: true, text: readFileSync(p, 'utf8'), via: p };
+  } catch (e) {
+    const why = cat.error ? String(cat.error.message || cat.error) : `systemctl cat exit ${cat.status}`;
+    return { ok: false, error: `${why}；读 ${p}：${String(e && e.message ? e.message : e).slice(0, 120)}` };
+  }
+}
+
+function checkUnitDeployLive() {
+  const repoDir = join(ROOT, UNIT_DIR_REL);
+  if (!existsSync(LIVE_UNIT_DIR)) {
+    skip(`单元上机闸 live：本机没有 ${LIVE_UNIT_DIR}——没查成，不是绿`);
+    return;
+  }
+  if (!existsSync(repoDir)) {
+    fail('单元上机闸 live 没查成', `恢复 ${UNIT_DIR_REL}/；目录不在 = 没查成，不是 0 个违规`, repoDir);
+    return;
+  }
+  const fragment = inspectFragmentDirs({
+    repoDir,
+    liveDir: LIVE_UNIT_DIR,
+    readdir: (d) => readdirSync(d),
+    readFile: (p) => readFileSync(p, 'utf8'),
+  });
+  if (fragment.state === 'unknown') {
+    skip(`单元上机闸 live：${fragment.detail}`);
+    return;
+  }
+
+  const heal = readLiveUnitText(HEAL_ROOT_TIMER);
+  const sync = readLiveUnitText(SYNC_TIMER);
+  const overlap = classifyHealSyncOverlap({
+    healCal: heal.ok ? parseOnCalendar(heal.text) : null,
+    syncCal: sync.ok ? parseOnCalendar(sync.text) : null,
+  });
+
+  if (fragment.state === 'red' || overlap.state === 'red') {
+    fail(
+      fragment.state === 'red'
+        ? '仓内 systemd 单元和机器上的活单元不是同一份'
+        : '活单元 heal-root 与 dao-sync 撞点',
+      `上机：${INSTALL_HINT}（会装 /usr/local/sbin/dao-install-units）。不要改 dao-sync 自己的点位。`,
+      [fragment.state === 'red' ? fragment.detail : '', overlap.state === 'red' ? overlap.detail : ''].filter(Boolean).join('；'),
+    );
+    return;
+  }
+  if (overlap.state === 'unknown') {
+    fail(
+      '活单元撞点没查成',
+      `systemctl cat 或读 ${LIVE_UNIT_DIR} 要能拿到 ${HEAL_ROOT_TIMER} 与 ${SYNC_TIMER} 的 OnCalendar；读不到不是「不撞」`,
+      overlap.detail + (heal.ok ? '' : `；heal：${heal.error}`) + (sync.ok ? '' : `；sync：${sync.error}`),
+    );
+    return;
+  }
+  green(`${fragment.detail}；${overlap.detail}`);
 }
 
 function checkInlineScriptSamples() {

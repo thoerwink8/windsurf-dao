@@ -47,6 +47,31 @@ function passwdHomes(readFile = readFileSync) {
   return null;
 }
 
+/**
+ * 覆盖值里的家目录列表（#1330）。
+ *
+ * 逗号、分号永远是分隔。冒号也是，但 Windows 盘符 `X:/` / `X:\` 里那个冒号不算——
+ * 按 `process.platform` 选分隔符会让 Linux 上的 `C:/Users/alice` 回归永远测不到。
+ */
+export function splitHomeOverride(raw) {
+  const out = [];
+  for (const chunk of String(raw ?? '').split(/[,;]/)) {
+    const segs = chunk.split(':');
+    let i = 0;
+    while (i < segs.length) {
+      const next = segs[i + 1];
+      if (next != null && /^[A-Za-z]$/.test(segs[i].trim()) && /^[\\/]/.test(next)) {
+        out.push(`${segs[i]}:${next}`);
+        i += 2;
+        continue;
+      }
+      out.push(segs[i]);
+      i += 1;
+    }
+  }
+  return out.map((s) => s.trim()).filter(Boolean);
+}
+
 /** POSIX `/…` 或 Windows `C:\` / `C:/`。相对路径不许进候选。 */
 function isAbsoluteHome(p) {
   const s = String(p || '').trim();
@@ -71,10 +96,10 @@ function normalizeHome(p) {
  */
 export function agentHomes({ env = process.env, readdir = readdirSync, readFile = readFileSync } = {}) {
   const candidates = new Set();
-  // 显式覆盖：排障/测试用，逗号或冒号分隔；给了就以它为准，不掺 passwd。
+  // 显式覆盖：排障/测试用；给了就以它为准，不掺 passwd。分隔规则见 splitHomeOverride。
   const override = String((env && (env.DAO_SKILL_HOMES || env.DAO_AGENT_HOMES)) || '').trim();
   if (override) {
-    for (const h of override.split(/[,:]/).map((s) => s.trim()).filter(Boolean)) {
+    for (const h of splitHomeOverride(override)) {
       const n = normalizeHome(h);
       if (n) candidates.add(n);
     }
