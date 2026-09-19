@@ -94,6 +94,51 @@ export function foldFindings({ items = [], findings = [], now, sla = {}, stage =
   return { items: out, added, bumped, skipped };
 }
 
+/** 债锚点：在问题点留一条 `DAO-DEBT:<指纹前8位>` 注释——再扫时一次 grep 就能找到（业界建议，见 #1460 的 T32 评论）。 */
+export function debtMarker(fingerprint) {
+  return `DAO-DEBT:${String(fingerprint || '').trim().slice(0, 8)}`;
+}
+
+/**
+ * 重查即重算（SonarQube 做法：不信任记录，重算）：出口前逐条重查，**不再复现才许关**。
+ * 只看两样**机械可判**的事实，不看模型感觉：
+ *   · 锚点标记还在不在（在 ⇒ 债还在；标记是记账时留在问题点的）
+ *   · 记的那个文件还在不在（文件没了 ⇒ 代码没了 ⇒ 不再复现）
+ * 三态：open（复现，现场看）/ resolved（可关，带证据）/ unscanned（判不了——**不许当已修**）。
+ * `markers`/`files` 不是 Set 一律 unscanned：「扫不到」与「扫完没有」必须分得开。
+ */
+export function judgeRecheck({ items, markers, files } = {}) {
+  if (!Array.isArray(items)) return { state: 'unscanned', why: '债册子没读成（取不到 ≠ 没有债）' };
+  if (!(markers instanceof Set)) return { state: 'unscanned', why: '标记没扫成（扫不到 ≠ 没有标记）' };
+  if (!(files instanceof Set)) return { state: 'unscanned', why: '文件清单没取到（取不到 ≠ 文件都在）' };
+  const open = [], resolved = [], unscanned = [];
+  for (const it of items) {
+    if (!it || !it.fingerprint) { unscanned.push({ item: it, evidence: 'no-fingerprint' }); continue; }
+    if (markers.has(debtMarker(it.fingerprint))) { open.push(it); continue; }
+    if (it.file && !files.has(String(it.file))) { resolved.push({ ...it, evidence: 'file-gone' }); continue; }
+    unscanned.push({ ...it, evidence: 'marker-missing' });
+  }
+  const why = `复现 ${open.length} / 可关 ${resolved.length} / 判不了 ${unscanned.length}`
+    + (unscanned.length ? '——判不了的逐条过一眼，不许当已修' : '');
+  return { state: unscanned.length ? 'unscanned' : 'green', open, resolved, unscanned, why };
+}
+
+/** 把重查判「可关」的条目移进 closed（带证据）。判不了的一律不动——宁可不关，不记假账。 */
+export function applyRecheck({ items = [], closed = [], resolved = [], now } = {}) {
+  const gone = new Map(resolved.map((r) => [r.fingerprint, r.evidence || 'file-gone']));
+  const moved = items.filter((i) => gone.has(i.fingerprint)).map((i) => ({
+    fingerprint: i.fingerprint,
+    file: i.file || '',
+    line: Number(i.line) || 0,
+    type: i.type,
+    severity: i.severity,
+    count: i.count,
+    evidence: gone.get(i.fingerprint),
+    closedAt: now,
+  }));
+  return { items: items.filter((i) => !gone.has(i.fingerprint)), closed: [...closed, ...moved], closedCount: moved.length };
+}
+
 /**
  * 判账本健康：超期（有 dueAt 且已过）→ 红；条数超阈 → 红。
  * 三态：items 不是数组 / now 不是时间 → unscanned。
