@@ -88,3 +88,13 @@ test('一致性：还没发布 / 清单取不到 → 没查成（不是绿也不
   assert.match(none.why, /还没发布/);
   assert.equal(judgePostedConsistency({ marker: 'x', expected: 'A', posted: null }).state, 'unscanned');
 });
+
+test('T31 伞单索引闸：只许里程碑号与版本单指针，别的 #N 即红', async () => {
+  const { judgeUmbrellaIndex } = await MOD;
+  const ok = judgeUmbrellaIndex({ body: '| **v2.11**（#3） | **在做** | #1460 的视图评论 |', allowed: [3, 1460, 2] });
+  assert.equal(ok.state, 'green', ok.why);
+  const bad = judgeUmbrellaIndex({ body: '| **v2.11**（#3） | 在做 | #1460 / #1490 / #1420 |', allowed: [3, 1460] });
+  assert.equal(bad.state, 'red');
+  assert.deepEqual(bad.refs, [1490, 1420]);
+  assert.equal(judgeUmbrellaIndex({ body: null, allowed: [] }).state, 'unscanned');
+});

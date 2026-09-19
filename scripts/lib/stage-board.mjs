@@ -102,6 +102,23 @@ export function stripGatewayMarkers(text) {
 
 const norm = (t) => stripGatewayMarkers(t).replace(/[ \t]+$/gm, '').replace(/\n+$/, '');
 
+/** T31：伞单索引闸——索引里**只许**出现里程碑号与版本单指针；出现别的 `#N` 即红（防伞单膨胀）。
+ *  `allowed` 给里程碑号 + 版本单号；别的 `#N` 一律算「具体 issue/T 项」。 */
+export function judgeUmbrellaIndex({ body, allowed = [] } = {}) {
+  if (typeof body !== 'string') return { state: 'unscanned', why: '索引正文没读到（取不到 ≠ 没膨胀）' };
+  const allow = new Set((allowed || []).map(Number).filter((n) => Number.isInteger(n)));
+  const refs = [...body.matchAll(/#(\d+)/g)].map((m) => Number(m[1])).filter((n) => !allow.has(n));
+  const uniq = [...new Set(refs)];
+  if (uniq.length) {
+    return {
+      state: 'red',
+      refs: uniq,
+      why: `伞单索引里出现 ${uniq.length} 个具体 issue 引用（${uniq.map((n) => `#${n}`).join(' ')}）——伞单只装里程碑与指针（T31）`,
+    };
+  }
+  return { state: 'green', why: `索引只含里程碑与版本单指针（允许 ${allow.size} 个引用）` };
+}
+
 /** 已发布评论与生成结果是否一致。三态：取不到清单/没发布 = 没查成（不是绿，也不是红）。 */
 export function judgePostedConsistency({ marker, expected, posted } = {}) {
   if (!Array.isArray(posted)) {

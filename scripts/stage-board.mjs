@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  renderStageView, renderUmbrellaIndex, judgePostedConsistency, stageViewMarker, UMBRELLA_MARKER,
+  renderStageView, renderUmbrellaIndex, judgePostedConsistency, judgeUmbrellaIndex, stageViewMarker, UMBRELLA_MARKER,
 } from './lib/stage-board.mjs';
 import { issueCommentUpsert } from './lib/issue-gateway.mjs';
 
@@ -58,7 +58,7 @@ function build(stage, doc) {
   const stageIssue = doc.stageIssue;
   const expectedView = renderStageView({ stage, milestone, stageIssue, issues: issues.json, debt: doc.debt });
   const expectedIndex = renderUmbrellaIndex({ stage, stageIssue, stageMilestoneNumber: hit.number, milestones: ms.json });
-  return { ok: true, expectedView, expectedIndex, milestoneNumber: hit.number, issueCount: issues.json.length };
+  return { ok: true, expectedView, expectedIndex, milestoneNumber: hit.number, milestoneNumbers: (ms.json || []).map((m) => m.number), issueCount: issues.json.length };
 }
 
 function main() {
@@ -105,6 +105,16 @@ function main() {
     verdict: umbComments.ok
       ? judgePostedConsistency({ marker: UMBRELLA_MARKER, expected: built.expectedIndex, posted: umbComments.json })
       : { state: 'unscanned', why: `评论清单没查成：${umbComments.error}` },
+  });
+  // T31：索引里只许有里程碑号与版本单指针——出现别的 #N 即红（防伞单膨胀）。
+  const umbHit = umbComments.ok
+    ? umbComments.json.filter((c) => c && typeof c.body === 'string' && c.body.includes(UMBRELLA_MARKER)).slice(-1)[0]
+    : null;
+  checks.push({
+    id: `伞单索引闸 #${UMBRELLA_ISSUE}`,
+    verdict: !umbComments.ok
+      ? { state: 'unscanned', why: `评论清单没查成：${umbComments.error}` }
+      : judgeUmbrellaIndex({ body: umbHit ? umbHit.body : null, allowed: [doc.stageIssue, ...(built.milestoneNumbers || [])] }),
   });
 
   if (write) {
