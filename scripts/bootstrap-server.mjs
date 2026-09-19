@@ -142,13 +142,21 @@ function main() {
     say(`  ${verdict.state === 'green' ? '✓' : verdict.state === 'red' ? '✗' : '?'} ${spec.unit}：${verdict.why}`);
   }
 
-  say('\n⑤ 归属提醒：Mirasim / key / Clash / ssh 接线归 ai-gateway-stack（deploy/mirasim-bootstrap.mjs）；本脚本只管编排面。');
+  say('\n⑤ 机器级清单（OS / Node / 执行体 / 工具 / 凭据落点；读不到算「没查成」）');
+  if (DRY) say('  [拟] node scripts/machine-inventory.mjs');
+  else {
+    const inv = run('node', [join(ROOT, 'scripts', 'machine-inventory.mjs')]);
+    say(String(inv.stdout || '').split('\n').slice(-3).join('\n'));
+    if (inv.status !== 0) say('  （清单有红或没查成——逐条看上面的报告，别当装好了）');
+  }
+
+  say('\n⑥ 归属提醒：Mirasim / key / Clash / ssh 接线归 ai-gateway-stack（deploy/mirasim-bootstrap.mjs）；本脚本只管编排面。');
   if (DRY) return 0;
   say(`\n[bootstrap] 结论：红 ${red}，没查成 ${unscanned}${red || unscanned ? '——逐条看上面，别当装好了' : '——全绿'}`);
   return red || unscanned ? 1 : 0;
 }
 
-if (process.argv[1] && import.meta.url === `file://${resolve(process.argv[1])}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exit(main());
 }
 
