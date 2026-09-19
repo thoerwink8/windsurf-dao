@@ -146,6 +146,18 @@ describe('one durable task owns execution, review, rework and closure', () => {
     assert.equal(result.escalationReceipt.written, false);
     assert.match(result.escalationReceipt.why, /inbox unwritable/);
   });
+  it('T39：本步超预算（Temporal 超时）→ 判停滞并上报，不混进 unscanned', async () => {
+    let escalated = null;
+    const f = fixture({
+      execute: async () => { throw Object.assign(new Error('activity start-to-close timeout'), { code: 'TIMEOUT' }); },
+      escalate: async (_task, payload) => { escalated = payload; return { written: true, path: '/tmp/x.json' }; },
+    });
+    const result = await runFusionTask(task(), f.io);
+    assert.equal(result.state, 'blocked');
+    assert.equal(result.failureClass, 'stall');
+    assert.equal(result.reason, 'step-stalled:executing');
+    assert.equal(escalated.blockedReason, 'step-stalled:executing');
+  });
   it('keeps rework inside the same task and does not integrate an earlier rejected head', async () => {
     let reviews = 0;
     const f = fixture({
