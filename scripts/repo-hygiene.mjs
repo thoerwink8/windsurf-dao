@@ -65,6 +65,21 @@ function issueRetire() {
   return { state: doc.verdict.state, why: doc.verdict.why };
 }
 
+// T44：版本视图/伞单索引与 GitHub 状态是否一致。不重造检查器——调 stage-board 自己（它已是机械判据）。
+// 它红时退出码是 1，但 stdout 仍是合法 JSON，所以先看能不能解析，别把「有红」洗成「没查成」。
+function stageBoard() {
+  const r = run(process.execPath, [join(ROOT, 'scripts', 'stage-board.mjs'), '--json']);
+  let doc;
+  try { doc = JSON.parse(String(r.stdout || '')); } catch {
+    return { state: 'unscanned', why: `stage-board 没查成（${String(r.stderr || r.stdout || '').trim().slice(0, 100)}）` };
+  }
+  if (!doc || !doc.counts) return { state: 'unscanned', why: 'stage-board 回执形态不对' };
+  return {
+    state: doc.state,
+    why: `版本视图/伞单索引：绿 ${doc.counts.green} / 红 ${doc.counts.red} / 没查成 ${doc.counts.unscanned}`,
+  };
+}
+
 function main() {
   const json = process.argv.includes('--json');
   const machines = (() => { try { return JSON.parse(process.env.DAO_HYGIENE_MACHINES || '[]'); } catch { return null; } })();
@@ -97,6 +112,7 @@ function main() {
   checks.push({ id: 'pr-backlog', kind: 'PR 积压', verdict: backlog.state ? backlog : judgePrBacklog({ open: backlog.open, ...HYGIENE_DEFAULTS }) });
 
   checks.push({ id: 'issue-retire', kind: '落后单清退', verdict: issueRetire() });
+  checks.push({ id: 'stage-board', kind: '阶段盘面', verdict: stageBoard() });
 
   const summary = summarizeHygiene(checks.map(c => c.verdict));
   if (json) {

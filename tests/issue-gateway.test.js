@@ -439,4 +439,167 @@ describe('issue-gateway CLI', () => {
     assert.equal(r.request.action, 'issue_create');
     assert.equal(r.request.host, 'claude');
   });
+
+  it('comment-upsert 映射 + --marker 解析', async () => {
+    const C = await CLI_LOAD;
+    const r = C.parseGatewayArgv([
+      'comment-upsert', '--repo', 'thoerwink8/windsurf-dao', '--issue', '1460',
+      '--marker', 'dao-stage-priority: v2.11', '--body', 'x',
+      '--host', 'devin', '--idempotency-key', 'k',
+    ]);
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.request.action, 'issue_comment_upsert');
+    assert.equal(r.request.marker, 'dao-stage-priority: v2.11');
+  });
+});
+
+describe('issue-gateway edit-title（标题前缀迁成标签后清干净）', () => {
+  it('校验：缺 issue / title 都拒', async () => {
+    const G = await LIB_LOAD;
+    const base = { action: 'issue_edit_title', repo: 'thoerwink8/windsurf-dao', issue: '5', title: 't', host: 'devin', idempotency_key: 'k' };
+    assert.equal(G.validateRequest({ ...base, issue: '' }).stage, 'reject_input');
+    assert.equal(G.validateRequest({ ...base, title: '' }).stage, 'reject_input');
+  });
+
+  it('改标题：回读等于新标题才算成', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeMarshal({ view: marshalIssue({ number: 5, title: '新标题' }) });
+    const r = G.applyIssueWrite(
+      { action: 'issue_edit_title', repo: 'thoerwink8/windsurf-dao', issue: '5', title: '新标题', host: 'devin', idempotency_key: 'k-title-1' },
+      { dir: tmp(), runMarshal: fake.runMarshal },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.title, '新标题');
+  });
+
+  it('回读标题对不上 → incomplete_receipt（不算成）', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeMarshal({ view: marshalIssue({ number: 5, title: '旧标题' }) });
+    const r = G.applyIssueWrite(
+      { action: 'issue_edit_title', repo: 'thoerwink8/windsurf-dao', issue: '5', title: '新标题', host: 'devin', idempotency_key: 'k-title-2' },
+      { dir: tmp(), runMarshal: fake.runMarshal },
+    );
+    assert.equal(r.ok, false);
+    assert.equal(r.stage, 'incomplete_receipt');
+  });
+});
+
+describe('issue-gateway comment-upsert（T44：有则改、无则发）', () => {
+  function fakeUpsert({ existing = [], patched, posted } = {}) {
+    const calls = [];
+    return {
+      calls,
+      runMarshal(args) {
+        calls.push(args.slice());
+        if (args[0] === 'api' && String(args[1]).includes('/comments?per_page=')) {
+          return { ok: true, out: JSON.stringify(existing) };
+        }
+        if (args[0] === 'api' && args[1] === '-X') {
+          const out = args[2] === 'PATCH' ? patched : posted;
+          if (out === 'fail') return { ok: false, error: '模拟写入失败' };
+          return { ok: true, out: JSON.stringify(out) };
+        }
+        return { ok: false, error: `未预期 ${args.join(' ')}` };
+      },
+    };
+  }
+
+  const comment = (over = {}) => ({
+    id: over.id || 900,
+    body: over.body !== undefined ? over.body : '<!-- dao-stage-priority: v2.11 -->\n旧视图',
+    user: over.user || { login: 'dao-marshal[bot]', type: 'Bot' },
+    html_url: 'https://github.com/thoerwink8/windsurf-dao/issues/1460#issuecomment-900',
+  });
+
+  const base = {
+    action: 'issue_comment_upsert',
+    repo: 'thoerwink8/windsurf-dao',
+    issue: '1460',
+    marker: 'dao-stage-priority: v2.11',
+    body: '<!-- dao-stage-priority: v2.11 -->\n新视图',
+    host: 'devin',
+    idempotency_key: 'k-upsert-1',
+  };
+
+  it('校验：缺 issue / marker / body 都拒', async () => {
+    const G = await LIB_LOAD;
+    assert.equal(G.validateRequest({ ...base, issue: '' }).stage, 'reject_input');
+    assert.equal(G.validateRequest({ ...base, marker: '' }).stage, 'reject_input');
+    assert.equal(G.validateRequest({ ...base, body: '' }).stage, 'reject_input');
+  });
+
+  it('找到 marker → 改那条，updated=true', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeUpsert({ existing: [comment()], patched: comment() });
+    const r = G.applyIssueWrite(base, { dir: tmp(), runMarshal: fake.runMarshal });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.updated, true);
+    assert.equal(r.commentId, '900');
+    const patch = fake.calls.find((a) => a[2] === 'PATCH');
+    assert.ok(patch, '没有发 PATCH');
+    assert.ok(patch[3].includes('/comments/900'), patch[3]);
+  });
+
+  it('没找到 marker → 发新评论，updated=false', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeUpsert({ existing: [], posted: comment({ id: 901 }) });
+    const r = G.applyIssueWrite(base, { dir: tmp(), runMarshal: fake.runMarshal });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.updated, false);
+    assert.ok(fake.calls.find((a) => a[2] === 'POST'), '没有发 POST');
+  });
+
+  it('多条都带 marker → 改最新那条（清单升序，认最后）', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeUpsert({
+      existing: [comment({ id: 800 }), comment({ id: 950 })],
+      patched: comment({ id: 950 }),
+    });
+    const r = G.applyIssueWrite(base, { dir: tmp(), runMarshal: fake.runMarshal });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const patch = fake.calls.find((a) => a[2] === 'PATCH');
+    assert.ok(patch[3].includes('/comments/950'), patch[3]);
+  });
+
+  it('回读正文里没有 marker → incomplete_receipt（不算成）', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeUpsert({ existing: [comment()], patched: comment({ body: '别的东西' }) });
+    const r = G.applyIssueWrite(base, { dir: tmp(), runMarshal: fake.runMarshal });
+    assert.equal(r.ok, false);
+    assert.equal(r.stage, 'incomplete_receipt');
+  });
+
+  it('回读作者不是 marshal → author_mismatch', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeUpsert({ existing: [comment()], patched: comment({ user: { login: 'someone', type: 'User' } }) });
+    const r = G.applyIssueWrite(base, { dir: tmp(), runMarshal: fake.runMarshal });
+    assert.equal(r.ok, false);
+    assert.equal(r.stage, 'author_mismatch');
+  });
+
+  it('同一幂等键第二次仍真去改（不被幂等账重放拦住）', async () => {
+    const G = await LIB_LOAD;
+    const dir = tmp();
+    const fake = fakeUpsert({ existing: [comment()], patched: comment() });
+    const first = G.applyIssueWrite(base, { dir, runMarshal: fake.runMarshal });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    assert.equal(first.replay, false);
+    const second = G.applyIssueWrite(base, { dir, runMarshal: fake.runMarshal });
+    assert.equal(second.ok, true, JSON.stringify(second));
+    assert.equal(second.replay, false, '第二次不许被重放拦下');
+    assert.equal(fake.calls.filter((a) => a[2] === 'PATCH').length, 2);
+  });
+});
+
+describe('issue-gateway milestone none（摘回 backlog）', () => {
+  it('milestone=none → 回读必须为空才算成', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeMarshal({ view: marshalIssue({ number: 5 }) });
+    const r = G.applyIssueWrite(
+      { action: 'issue_milestone', repo: 'thoerwink8/windsurf-dao', issue: '5', milestone: 'none', host: 'devin', idempotency_key: 'k-ms-clear' },
+      { dir: tmp(), runMarshal: fake.runMarshal },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.milestone, null);
+  });
 });

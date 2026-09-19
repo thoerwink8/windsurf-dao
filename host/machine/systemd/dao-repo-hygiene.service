@@ -1,7 +1,9 @@
 # /etc/systemd/system/dao-repo-hygiene.service
 #
 # 仓库卫生巡检（用户 2026-09-19：「主分支都有待合入或待拉取的，应该要有制度保证」）：
-# 跑 scripts/repo-hygiene.mjs —— 本机仓的未推/未拉 + 声明的其它仓与机器 + PR 积压（数量/年龄/冲突）。
+# 跑 scripts/repo-hygiene.mjs —— 本机仓的未推/未拉 + 声明的其它仓与机器 + PR 积压（数量/年龄/冲突）
+# + 阶段盘面（T44：版本视图/伞单索引与 GitHub 状态是否一致，调 stage-board 自己）
+# + 落后单清退（#1503：先 issue-retire --apply 两段式清退，再由报告闸看见结果）。
 #
 # 为什么要有它（实测三件事，都是靠人偶然发现的）：
 #   · 服务器上的 ai-gateway-stack 有 2 笔改动躺了 9 天没推；
@@ -18,7 +20,7 @@
 # User=orca 是硬要求：ExecStart 指进 /srv/projects/windsurf-dao，那个仓每个执行体都能写。
 
 [Unit]
-Description=windsurf-dao 仓库卫生巡检（未推/未拉 + PR 积压 + 落后单清退）
+Description=windsurf-dao 仓库卫生巡检（未推/未拉 + PR 积压 + 阶段盘面 + 落后单清退）
 After=network-online.target
 
 [Service]
