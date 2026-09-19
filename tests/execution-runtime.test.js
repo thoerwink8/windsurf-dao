@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {once} from 'node:events';
-import {createExecutionRuntime,judgeExecutionCompletion,maintenanceStatus,resolveExecutionProfile,promotedVersion,ensureGitWorkspace} from '../scripts/lib/execution-runtime.mjs';
+import {createExecutionRuntime,judgeExecutionCompletion,maintenanceStatus,resolveExecutionProfile,promotedVersion,ensureGitWorkspace,allocateManagedScanBudget,summarizeScanObservation,formatIncompleteScanWhy,COMMANDER_SCAN_BUDGET_MS,COMMANDER_SCAN_SPAWN_MS,SCAN_WRAP_UP_MS} from '../scripts/lib/execution-runtime.mjs';
 import {stableHooksDir} from '../scripts/lib/control-plane-write.mjs';
 import {acquireExecutionFence,withExecutionFence,writeExecutionRecord,describeFenceFailure,FLOCK_TIMEOUT_MS} from '../scripts/lib/execution-fence.mjs';
 
@@ -17,8 +17,8 @@ const emptyScan=()=>({ok:true,procs:[]});
 const profile={id:'cursor-test',backend:'acp',agent:'cursor',model:'composer-test',enabled:true,availability:{status:'available'},provider:'cursor',accountPoolId:'cursor-owner',route:'local',actualVendor:'cursor'};
 function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'execution-runtime-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));const workdir=path.join(dir,'tree');fs.mkdirSync(workdir);return {dir,workdir,stateDir:path.join(dir,'.dao/execution')};}
 function fakeRuntime(overrides={}) {
-  const views=new Map(),calls={start:[],read:[],stop:[],list:0,resume:[]};
-  const rt={views,calls,config:{},async startSession(spec){calls.start.push(spec);const sessionKey=spec.sessionKey||key(spec.agent);views.set(sessionKey,{phase:'running',text:'',toolCalls:[],missing:false});return {sessionKey,taskId:spec.taskId};},async readSession(k){calls.read.push(k);return views.get(k)||{missing:true,phase:null};},async listSessions(){calls.list++;return {ok:true,sessions:[]};},async stopSession(k){calls.stop.push(k);views.set(k,{phase:'stopped',text:'',missing:false});return {ok:true,verified:true};},async interact(){return {ok:true};},...overrides};
+  const views=new Map(),calls={start:[],read:[],stop:[],list:0,listArgs:[],resume:[]};
+  const rt={views,calls,config:{},async startSession(spec){calls.start.push(spec);const sessionKey=spec.sessionKey||key(spec.agent);views.set(sessionKey,{phase:'running',text:'',toolCalls:[],missing:false});return {sessionKey,taskId:spec.taskId};},async readSession(k){calls.read.push(k);return views.get(k)||{missing:true,phase:null};},async listSessions(o){calls.list++;calls.listArgs.push(o||{});return {ok:true,sessions:[]};},async stopSession(k){calls.stop.push(k);views.set(k,{phase:'stopped',text:'',missing:false});return {ok:true,verified:true};},async interact(){return {ok:true};},...overrides};
   return rt;
 }
 function runtime(f,opts={}){return createExecutionRuntime({homeDir:f.dir,profiles:[],mirasimRuntime:fakeRuntime(),acpRuntime:fakeRuntime(),scanProcesses:emptyScan,cleanupPollMs:1,stopVerifyTries:1,...opts});}
@@ -427,6 +427,121 @@ linuxTest('managed active reads have a shared deadline and report omissions as u
 });
 linuxTest('external/debug inventory refuses truncated responses and keeps explicit scope',async t=>{
   const f=fixture(t),m=fakeRuntime({async listSessions(){return {ok:true,hasMore:true,sessions:[{key:key(),state:'running'}]};}}),r=await runtime(f,{mirasimRuntime:m}).listSessions({includeExternal:true});assert.equal(r.ok,false);assert.equal(r.scope,'managed+external');assert.equal(r.includesExternal,true);
+});
+test('#1397 观察计数：缺数组是没扫到，N+M 分得开',()=>{
+  const missing=summarizeScanObservation({sessions:null,errors:[]});
+  assert.equal(missing.missing,true);
+  assert.equal(missing.total,0);
+  assert.equal(missing.observed,0);
+  const mixed=summarizeScanObservation({
+    sessions:[{state:'running'},{state:'unknown'},{state:'gone'}],
+    errors:[{error:'scan-budget-exhausted'}],
+  });
+  assert.equal(mixed.missing,false);
+  assert.equal(mixed.total,3);
+  assert.equal(mixed.observed,2);
+  assert.equal(mixed.unknown,1);
+  assert.equal(mixed.errors,1);
+  assert.match(formatIncompleteScanWhy(mixed), /观察到 2，未知 1，错误 1/);
+});
+test('#1397 组合预算切分：回退预留，且子预算小于 40 秒墙钟',()=>{
+  assert.equal(COMMANDER_SCAN_BUDGET_MS<COMMANDER_SCAN_SPAWN_MS,true);
+  assert.equal(COMMANDER_SCAN_SPAWN_MS,40000);
+  assert.equal(COMMANDER_SCAN_BUDGET_MS,38000);
+  const withFallback=allocateManagedScanBudget({now:0,deadline:15000,wrapUpMs:0,needSnapshotFallback:true,snapshotReserveMs:8000});
+  assert.equal(withFallback.listMs,7000);
+  assert.equal(withFallback.fallbackMs,8000);
+  assert.equal(withFallback.exhausted,false);
+  const noFallback=allocateManagedScanBudget({now:0,deadline:15000,wrapUpMs:0,needSnapshotFallback:false,snapshotReserveMs:8000});
+  assert.equal(noFallback.listMs,15000);
+  assert.equal(noFallback.fallbackMs,0);
+  const tight=allocateManagedScanBudget({now:0,deadline:400,wrapUpMs:SCAN_WRAP_UP_MS,needSnapshotFallback:true,snapshotReserveMs:8000});
+  assert.equal(tight.exhausted,true);
+  assert.equal(tight.listMs,0);
+  assert.equal(tight.fallbackMs,0);
+});
+linuxTest('#1397 正控：名单假时钟耗尽后仍读可读快照，不当 unknown，不超预算写盘',async t=>{
+  let clock=0;
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m,now:()=>clock,managedListTimeoutMs:15000,scanWrapUpMs:0,managedReadTimeoutMs:8000});
+  await rt.startSession(spec(f));
+  let listTimeout=null;
+  m.listSessions=async(o)=>{
+    m.calls.list++;
+    listTimeout=o&&o.timeoutMs;
+    const cap=Number(listTimeout);
+    clock+=Number.isFinite(cap)?cap:30000;
+    return {ok:false,sessions:null,why:'会话名单等帧超时',stage:'list'};
+  };
+  let reads=0;
+  m.readSession=async()=>{reads+=1;return {phase:'running',text:'live',missing:false,via:'snapshot'};};
+  const r=await rt.listSessions();
+  assert.equal(m.calls.list,1);
+  assert.equal(listTimeout,7000);
+  assert.equal(reads,1);
+  assert.equal(r.ok,true);
+  assert.equal(r.complete,true);
+  assert.equal(r.sessions[0].state,'running');
+  assert.equal(clock<=15000,true);
+  assert.equal(r.sessions.length,1);
+});
+linuxTest('#1397 负控：超过 deadline 的观察不落盘',async t=>{
+  let clock=0;
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m,now:()=>clock,managedListTimeoutMs:15000,scanWrapUpMs:0,managedReadTimeoutMs:8000});
+  await rt.startSession(spec(f));
+  const before=records(f)[0];
+  m.listSessions=async(o)=>{m.calls.list++;clock+=Number(o&&o.timeoutMs)||0;return {ok:false,sessions:null,why:'超时',stage:'list'};};
+  m.readSession=async()=>{clock+=20000;return {phase:'running',text:'live',missing:false,via:'snapshot'};};
+  const r=await rt.listSessions();
+  assert.equal(r.sessions[0].state,'running');
+  assert.equal(records(f)[0].observedState,before.observedState);
+  assert.equal(clock>15000,true);
+});
+linuxTest('#1397 大登记量：并发 worker 只枚举一次全局名单',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m,managedReadConcurrency:4});
+  for(let i=0;i<8;i++){
+    const workdir=path.join(f.dir,'tree-'+i);
+    fs.mkdirSync(workdir);
+    await rt.startSession({...spec(f),workdir});
+  }
+  m.listSessions=async()=>{m.calls.list++;return {ok:false,sessions:null};};
+  const r=await rt.listSessions();
+  assert.equal(m.calls.list,1);
+  assert.equal(r.sessions.length,8);
+  assert.equal(r.stages.listCalls,1);
+});
+linuxTest('#1397 N 成功 + M 失败：条目保留，计数可读，不当空名单',async t=>{
+  let clock=0;
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{
+    mirasimRuntime:m,now:()=>clock,managedListTimeoutMs:15000,scanWrapUpMs:0,
+    managedReadTimeoutMs:8000,managedReadConcurrency:1,
+  });
+  const workdir2=path.join(f.dir,'tree-2');
+  fs.mkdirSync(workdir2);
+  await rt.startSession(spec(f));
+  await rt.startSession({...spec(f),workdir:workdir2});
+  m.listSessions=async(o)=>{clock+=Number(o&&o.timeoutMs)||0;return {ok:false,sessions:null,why:'超时',stage:'timeout'};};
+  m.readSession=async()=>{clock+=8000;return {phase:'running',text:'live',missing:false,via:'snapshot'};};
+  const r=await rt.listSessions();
+  assert.equal(r.sessions.length,2);
+  assert.equal(r.counts.total,2);
+  assert.equal(r.counts.observed,1);
+  assert.equal(r.counts.unknown,1);
+  assert.equal(r.counts.errors>=1,true);
+  assert.equal(r.ok,false);
+  assert.equal(r.complete,false);
+  assert.equal(r.sessions.some(s=>s.state==='running'),true);
+  assert.equal(r.sessions.some(s=>s.state==='unknown'),true);
+  assert.match(formatIncompleteScanWhy(r.counts),/观察到 1，未知 1/);
+});
+linuxTest('#1397 名单失败但快照可读：状态不是 unknown，错误态可分',async t=>{
+  const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
+  await rt.startSession(spec(f));
+  m.listSessions=async()=>({ok:false,missing:true,sessions:null,why:'服务端没回可用的 sessions 帧（没查成）'});
+  m.views.set(records(f)[0].sessionKey,{phase:'running',text:'live',missing:false});
+  const r=await rt.listSessions();
+  assert.equal(r.sessions[0].state,'running');
+  assert.equal(r.ok,true);
+  assert.equal(r.sessions.length>0,true);
 });
 linuxTest('resume uses new ACP key through the same fence and preserves task/account lineage',async t=>{
   const f=fixture(t),a=fakeRuntime(),rt=runtime(f,{profiles:[profile],acpRuntime:a});const s=await rt.startSession({profileId:profile.id,workdir:f.workdir,prompt:'fixture',taskId:'same-task',issue:1174});a.views.set(s.sessionKey,{phase:'done',text:'turn ended'});

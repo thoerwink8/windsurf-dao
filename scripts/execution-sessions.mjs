@@ -1,7 +1,12 @@
 #!/usr/bin/env node
-import {createExecutionRuntime} from './lib/execution-runtime.mjs';
+import {COMMANDER_SCAN_BUDGET_MS,createExecutionRuntime,formatIncompleteScanWhy,summarizeScanObservation} from './lib/execution-runtime.mjs';
 import {EXECUTION_WAITING,sessionStateOf} from './lib/execution-states.mjs';
 import {pathToFileURL} from 'node:url';
+export function scanBudgetMs(env=process.env) {
+  const n=Number.parseInt(env.DAO_EXECUTION_SCAN_BUDGET_MS||'',10);
+  if(Number.isInteger(n)&&n>0)return n;
+  return COMMANDER_SCAN_BUDGET_MS;
+}
 export function normalizeExecutionSession(s) {
   const interactions=s.interactions||s.snapshot?.interactions||[];
   const phase=sessionStateOf(s)||'';
@@ -26,10 +31,30 @@ export function normalizeExecutionSession(s) {
 }
 export async function main() {
 try {
-  const r=await createExecutionRuntime().listSessions();
-  if(!r.ok)throw new Error('execution session scan incomplete: '+JSON.stringify(r.errors));
-  const sessions=r.sessions.map(normalizeExecutionSession);
-  console.log(JSON.stringify({type:'sessions',sessions,count:sessions.length,scope:r.scope||'global'}));
+  const budgetMs=scanBudgetMs();
+  const r=await createExecutionRuntime({managedListTimeoutMs:budgetMs}).listSessions();
+  const complete=r.ok===true&&r.partial!==true&&r.complete!==false;
+  const sessions=Array.isArray(r.sessions)?r.sessions.map(normalizeExecutionSession):null;
+  const counts=r.counts||summarizeScanObservation({sessions,errors:r.errors});
+  const why=complete?null:formatIncompleteScanWhy(counts);
+  console.log(JSON.stringify({
+    type:'sessions',
+    sessions,
+    count:Array.isArray(sessions)?sessions.length:0,
+    scope:r.scope||'managed',
+    ok:r.ok===true,
+    partial:complete?false:true,
+    complete,
+    stages:r.stages||null,
+    errors:r.errors||[],
+    counts,
+    why,
+  }));
+  if(!complete){
+    // 计数走 stdout 协议帧；stderr 只留短 why，避免再被 200 字节截成 "ma"
+    console.error(why);
+    process.exitCode=2;
+  }
 } catch(e) {console.error(e.message);process.exitCode=2;}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)await main();

@@ -519,12 +519,16 @@ export async function stopSessionAndReap(runtime, sessionKey, { workdir = null }
     catch (e) {
       return { ok: false, unscanned: true, why: `会话清单没查成：${String(e?.message || e)}` };
     }
-    if (!listed || listed.ok !== true) {
+    const rows = Array.isArray(listed?.sessions) ? listed.sessions : null;
+    if (!rows) {
       return { ok: false, unscanned: true, why: listed?.error || listed?.why || '会话清单没查成' };
     }
-    const hit = (listed.sessions || []).find((s) => String(s?.sessionKey || s?.key || s?.id || '') === String(sessionKey));
+    const hit = rows.find((s) => String(s?.sessionKey || s?.key || s?.id || '') === String(sessionKey));
     if (!hit) {
-      return { ok: false, unscanned: true, why: `会话 ${sessionKey} 不在会话清单，无法核实 worktree` };
+      const why = listed && listed.ok !== true
+        ? (listed.error || listed.why || '会话清单没查成')
+        : `会话 ${sessionKey} 不在会话清单，无法核实 worktree`;
+      return { ok: false, unscanned: true, why };
     }
     target = hit.cwd || hit.workdir || hit.worktree || null;
     if (!target) {

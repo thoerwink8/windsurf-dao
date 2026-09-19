@@ -114,6 +114,75 @@ function busy(message,reason='lease-held'){const e=new Error(message);e.code='bu
 // 免得「挡人的说它没死、回收的说它死了」（2026-09-11 #1150 实咬）。
 const RESERVED=EXECUTION_RESERVED;
 const FINISHED=EXECUTION_FINISHED;
+/** 指挥官 spawn 墙钟（commander.mjs scanSessions timeout）。#1397 不许加大这个数来掩盖组合预算缝隙。 */
+export const COMMANDER_SCAN_SPAWN_MS = 40_000;
+/** 子进程端到端预算：必须小于 spawn 墙钟，留给 JSON 打印和进程退出。 */
+export const COMMANDER_SCAN_BUDGET_MS = 38_000;
+export const SCAN_WRAP_UP_MS = 500;
+
+export function recordNeedsManagedFallback(m) {
+  if (!m || !m.sessionKey) return false;
+  if (m.cleanupVerified) return false;
+  if (RESERVED.has(m.state)) return false;
+  return !FINISHED.has(m.state) || m.state === 'incomplete';
+}
+
+/** 把总预算切成名单 / 快照回退 / 收尾。回退是预留，不是名单用剩才给。 */
+export function allocateManagedScanBudget({
+  now,
+  deadline,
+  wrapUpMs = SCAN_WRAP_UP_MS,
+  needSnapshotFallback = false,
+  snapshotReserveMs = 8000,
+} = {}) {
+  const remainingMs = Math.max(0, Number(deadline) - Number(now));
+  const wrap = Number.isFinite(Number(wrapUpMs)) && Number(wrapUpMs) >= 0 ? Number(wrapUpMs) : SCAN_WRAP_UP_MS;
+  const usable = Math.max(0, remainingMs - wrap);
+  const want = needSnapshotFallback
+    ? Math.max(0, Number.isFinite(Number(snapshotReserveMs)) ? Number(snapshotReserveMs) : 0)
+    : 0;
+  const fallbackMs = Math.min(want, usable);
+  const listMs = Math.max(0, usable - fallbackMs);
+  return { remainingMs, wrapUpMs: wrap, fallbackMs, listMs, exhausted: usable <= 0 };
+}
+
+/** N 条成功 + M 条失败必须都能从返回体读出来；缺数组 = 没扫到任何样本。 */
+export function summarizeScanObservation({ sessions, errors } = {}) {
+  const list = Array.isArray(sessions) ? sessions : null;
+  const errs = Array.isArray(errors) ? errors : [];
+  const byError = {};
+  for (const e of errs) {
+    const k = String((e && (e.error || e.why)) || 'unknown');
+    byError[k] = (byError[k] || 0) + 1;
+  }
+  let observed = 0;
+  let unknown = 0;
+  if (list) {
+    for (const s of list) {
+      const st = s && String(s.state || s.phase || '');
+      if (st && st !== 'unknown') observed += 1;
+      else unknown += 1;
+    }
+  }
+  return {
+    total: list ? list.length : 0,
+    observed,
+    unknown: list ? unknown : 0,
+    missing: list == null,
+    errors: errs.length,
+    byError,
+  };
+}
+
+export function formatIncompleteScanWhy(counts, why) {
+  const c = counts && typeof counts === 'object' ? counts : {};
+  const n = Number.isInteger(c.observed) ? c.observed : 0;
+  const m = Number.isInteger(c.unknown) ? c.unknown : 0;
+  const e = Number.isInteger(c.errors) ? c.errors : 0;
+  const head = `会话名单不完整：观察到 ${n}，未知 ${m}，错误 ${e}`;
+  const extra = why ? `（${String(why)}）` : '';
+  return `${head}${extra}——没查成，不许折成完整空名单`;
+}
 // 已经停在 stopping 时，宽限时钟不许被重试或失败回写刷新。
 // 看门狗每轮对 stopping 再 stop-session；失败路径若写 updatedAt=now()，
 // 重置它的正是等它的那个循环，宽限窗永远到不了（#1174 缺陷二，2026-09-12 实咬）。
@@ -472,11 +541,19 @@ export function createExecutionRuntime(opts={}) {
       });
     }
   }
-  async function listSessions({includeExternal=false,readTimeoutMs=opts.managedReadTimeoutMs??8000,maxActive=opts.maxActiveReads??64}={}) {
+  async function listSessions({includeExternal=false,readTimeoutMs=opts.managedReadTimeoutMs??8000,maxActive=opts.maxActiveReads??64,timeoutMs}={}) {
     let records;
-    try{records=await fence(registry);}catch{return {ok:false,scope:'managed',includesExternal:false,sessions:[],errors:[{backend:'registry',error:'managed registry unreadable'}],partial:true};}
+    try{records=await fence(registry);}catch{return {ok:false,scope:'managed',includesExternal:false,sessions:[],errors:[{backend:'registry',error:'managed registry unreadable'}],partial:true,complete:false,stages:{list:'error',listCalls:0,snapshots:{attempted:0,completed:0}}};}
     const sessions=new Array(records.length),errors=[];
-    const deadline=Date.now()+(opts.managedListTimeoutMs??15000);
+    const given=Number(timeoutMs);
+    const budget=Number.isFinite(given)&&given>0?given:(opts.managedListTimeoutMs??15000);
+    const wrapUpMs=opts.scanWrapUpMs??SCAN_WRAP_UP_MS;
+    const started=now();
+    const deadline=started+budget;
+    const remaining=()=>Math.max(0,deadline-now()-wrapUpMs);
+    const needFb=records.some(recordNeedsManagedFallback);
+    const alloc=allocateManagedScanBudget({now:started,deadline,wrapUpMs,needSnapshotFallback:needFb,snapshotReserveMs:Math.max(1,readTimeoutMs)});
+    const stages={startedAt:started,alloc,list:alloc.listMs<=0?'skipped':null,listCalls:0,listMs:null,snapshots:{attempted:0,completed:0}};
     let cursor=0,active=0;
     // 服务端的会话名单**按需查一次、全 worker 复用**：它带每条会话的 runState/open（服务端
     // 对自己会话的权威定性），是「这条已经终结了吗」最便宜的答案——比逐个读快照快一个数量级
@@ -486,13 +563,19 @@ export function createExecutionRuntime(opts={}) {
     // 既有用例盯着这个（managed pending inventory… 断言 m.calls.list===0）。所以用惰性
     // promise：第一个真需要的 worker 触发，其余等同一个结果，全程最多一次。
     // 查不成就是 null，退回「读快照判进度」的老路（fail-open 到旧行为，不假装终结）。
+    // #1397：名单必须吃剩余预算，不能自己再开一轮；慢/失败时预留快照回退，不许把所有项变 unknown。
     let listedIndexPromise = null;
     const listedIndexOnce = () => {
       if (!listedIndexPromise) {
         listedIndexPromise = (async () => {
+          if (alloc.listMs <= 0) return null;
+          const tList=now();
+          stages.listCalls+=1;
           try {
-            const listed = await mirasim.listSessions({ scope: 'global' });
+            const listed = await mirasim.listSessions({ scope: 'global', timeoutMs: alloc.listMs });
+            stages.listMs = now()-tList;
             if (listed && listed.ok === true && Array.isArray(listed.sessions)) {
+              stages.list = listed.complete === true && listed.partial !== true && listed.hasMore !== true ? 'ok' : 'partial';
               const idx = new Map();
               for (const x of listed.sessions) {
                 const k = x.sessionKey || x.id || x.key;
@@ -501,11 +584,20 @@ export function createExecutionRuntime(opts={}) {
               idx.complete = listed.complete === true && listed.partial !== true && listed.hasMore !== true;
               return idx;
             }
-          } catch { /* 名单查不成 = 这条线索没有，退回读快照 */ }
+            const why=String(listed?.why||'');
+            stages.list = listed?.stage==='connect' ? 'connect'
+              : listed?.stage==='timeout' || /超时|预算|deadline|建连/.test(why) ? 'timeout'
+              : listed?.partial ? 'partial'
+              : 'error';
+          } catch { stages.list = 'error'; stages.listMs = now()-tList; }
           return null;
         })();
       }
       return listedIndexPromise;
+    };
+    const persistObservation=(m,state)=>{
+      if(now()>=deadline)return Promise.resolve(null);
+      return fence(()=>{ const cur = metadata(keyOf(m)); if (!cur) return null; const next = { ...cur, state: RESERVED.has(cur.state) || cur.cleanupVerified ? cur.state : state, observedState: state, observedAt: now(), taskCompleted: false }; atomic(metaFile(keyOf(m)), next); return next; });
     };
     const worker=async()=>{
       for(;;) {
@@ -517,7 +609,7 @@ export function createExecutionRuntime(opts={}) {
         // 没查成（2026-09-10 实咬：三条过期会话让观测集恒 incomplete，指挥官冻结差集重派）。
         // 名单没这条 / 没给状态，才退回「读快照判进度」那条老路。
         let listedState = null;
-        const needList = (!FINISHED.has(state) || state === 'incomplete') && !m.cleanupVerified && m.sessionKey && !RESERVED.has(state);
+        const needList = recordNeedsManagedFallback(m);
         const listedIndex = needList ? await listedIndexOnce() : null;
         const hit = listedIndex ? listedIndex.get(String(m.sessionKey)) : null;
         if (hit) {
@@ -538,13 +630,16 @@ export function createExecutionRuntime(opts={}) {
         }
         if (listedState) {
           state = listedState;
-          try { await fence(() => { const cur = metadata(keyOf(m)); if (!cur) return null; const next = { ...cur, state: RESERVED.has(cur.state) || cur.cleanupVerified ? cur.state : listedState, observedState: listedState, observedAt: now(), taskCompleted: false }; atomic(metaFile(keyOf(m)), next); return next; }); } catch { /* 落不下不改判 */ }
-        } else if((!FINISHED.has(state)||state==='incomplete')&&!m.cleanupVerified&&m.sessionKey&&!RESERVED.has(state)) {
-          if(++active>maxActive||Date.now()>=deadline){state='unknown';errors.push({backend:m.backend,recordKey:keyOf(m),error:'managed active scan limit'});}
+          try { await persistObservation(m, listedState); } catch { /* 落不下不改判 */ }
+        } else if(needList) {
+          const rem=remaining();
+          if(++active>maxActive){state='unknown';errors.push({backend:m.backend,recordKey:keyOf(m),error:'managed active scan limit'});}
+          else if(rem<=0){state='unknown';errors.push({backend:m.backend,recordKey:keyOf(m),error:'scan-budget-exhausted'});}
           else {
             let timer;
+            stages.snapshots.attempted+=1;
             try {
-              const view=await Promise.race([backend(m.sessionKey,m).readSession(m.sessionKey),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('timeout')),Math.max(1,Math.min(readTimeoutMs,deadline-Date.now())));})]);
+              const view=await Promise.race([backend(m.sessionKey,m).readSession(m.sessionKey),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('timeout')),Math.max(1,Math.min(readTimeoutMs,rem)));})]);
               // 「服务端查无此会话」与「这次没读成」不是一回事：前者是**已经消失**（会话档案被
               // 归档/清掉、服务端重启丢了内存里的会话），后者是慢或抖。旧代码把两者都算成
               // 「没查成」并让整张名单 ok:false——2026-09-10 实咬：一条 review-1175 的死会话记录
@@ -564,12 +659,9 @@ export function createExecutionRuntime(opts={}) {
               }
               if(state==='unknown'&&view&&view.partial===true&&FINISHED.has(String(view.phase||'')))state=String(view.phase);
               }
-              m=await fence(()=>{
-                const current=metadata(keyOf(m));if(!current)throw new Error('registry changed');
-                const next={...current,state:RESERVED.has(current.state)||current.cleanupVerified?current.state:state,observedState:state,observedAt:now(),taskCompleted:false};
-                atomic(metaFile(keyOf(m)),next);return next;
-              });
-              state=m.state;
+              stages.snapshots.completed+=1;
+              const written=await persistObservation(m,state);
+              if(written){m=written;state=m.state;}
             }catch{
               // 读快照失败（超时/抛错）：**别把 unknown 写回记录**。写回之后这一条就永远
               // 进不了上面的 FINISHED 短路，每轮都白等一整趟超时，而且每轮都给整张名单
@@ -584,7 +676,7 @@ export function createExecutionRuntime(opts={}) {
         sessions[index]={...m,key:m.sessionKey||keyOf(m),state,phase:state,cwd:m.workdir,title:m.title||(m.issue?'ISSUE-#'+m.issue:m.pr?'PR-#'+m.pr:null),scope:'managed',taskCompleted:false};
         // 记账自愈：这一轮真读到过终态就落盘，免得下一轮又按 `unknown` 去读一趟必然超时的快照。
         // （旧实咬：上一次读失败写回 unknown，此后再也不进 FINISHED 段，每轮白等 8 秒。）
-        if (FINISHED.has(state) && m.state !== state) {
+        if (FINISHED.has(state) && m.state !== state && now()<deadline) {
           try { await fence(() => { const cur = metadata(keyOf(m)); if (!cur) return null; const next = { ...cur, observedState: state, observedAt: now() }; atomic(metaFile(keyOf(m)), next); return next; }); }
           catch { /* 落不下不改判，下一轮再说 */ }
         }
@@ -593,14 +685,25 @@ export function createExecutionRuntime(opts={}) {
     const workers=Math.max(1,Math.min(records.length||1,opts.managedReadConcurrency??4));
     await Promise.all(Array.from({length:workers},worker));
     if(includeExternal) {
-      const results=await Promise.allSettled([mirasim.listSessions({scope:'global'}),acp.listSessions()]);
-      for(let i=0;i<results.length;i++) {
-        const r=results[i];
-        if(r.status!=='fulfilled'||r.value?.ok!==true||r.value.partial||r.value.hasMore===true||!Array.isArray(r.value.sessions))errors.push({backend:i?'acp':'mirasim',error:'external scan incomplete'});
-        else for(const s of r.value.sessions)if(!sessions.some(m=>(m.sessionKey||m.key)===(s.sessionKey||s.key||s.id)))sessions.push({...s,scope:'external'});
+      if(remaining()<=0) {
+        errors.push({backend:'mirasim',error:'external scan incomplete'});
+        errors.push({backend:'acp',error:'external scan incomplete'});
+      } else {
+        const rem=remaining();
+        const results=await Promise.allSettled([mirasim.listSessions({scope:'global',timeoutMs:rem}),acp.listSessions()]);
+        for(let i=0;i<results.length;i++) {
+          const r=results[i];
+          if(r.status!=='fulfilled'||r.value?.ok!==true||r.value.partial||r.value.hasMore===true||!Array.isArray(r.value.sessions))errors.push({backend:i?'acp':'mirasim',error:'external scan incomplete'});
+          else for(const s of r.value.sessions)if(!sessions.some(m=>(m.sessionKey||m.key)===(s.sessionKey||s.key||s.id)))sessions.push({...s,scope:'external'});
+        }
       }
     }
-    return {ok:errors.length===0,scope:includeExternal?'managed+external':'managed',includesExternal:includeExternal,sessions,errors,partial:errors.length>0};
+    const counts=summarizeScanObservation({sessions,errors});
+    stages.snapshots.observed=counts.observed;
+    stages.snapshots.unknown=counts.unknown;
+    stages.byError=counts.byError;
+    const partial=errors.length>0;
+    return {ok:!partial,scope:includeExternal?'managed+external':'managed',includesExternal:includeExternal,sessions,errors,partial,complete:!partial,counts,stages};
   }
   async function waitForCompletion(key,{timeoutMs=600000,pollMs=1500}={}) {
     const deadline=now()+timeoutMs;

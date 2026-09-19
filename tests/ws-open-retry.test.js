@@ -112,6 +112,26 @@ describe('回环 ws 开连接重试', () => {
     assert.equal(flat[1] > flat[0], true, '退避要随次数递增');
   });
 
+  it('⑨剩余预算用尽不再退避重试（#1397）', async () => {
+    const { connectWithRetry } = await RT;
+    let clock = 0;
+    let calls = 0;
+    const slept = [];
+    await assert.rejects(
+      connectWithRetry({
+        connect: async () => { calls += 1; clock += 100; throw unavailable(); },
+        sleep: async (ms) => { slept.push(ms); clock += ms; },
+        random: () => 0,
+        now: () => clock,
+        deadlineMs: 50,
+        openTimeoutMs: 8000,
+      }),
+      /连不上|建连预算用尽/,
+    );
+    assert.equal(calls, 1, '第一次失败后剩余不够，不许再试');
+    assert.equal(slept.length, 0);
+  });
+
   it('⑧接线：createRuntime.open 真走 connectWithRetry（第一次抖、第二次通）', async () => {
     const { createRuntime } = await RT;
     let calls = 0;

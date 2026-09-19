@@ -477,6 +477,30 @@ describe('sessions 帧形状：null / 非数组 = 没查成，不许折成空名
     assert.deepEqual(r.list, []);
   });
 
+  it('{type:sessions, complete:false} → ok:false，即使 sessions 是数组', async () => {
+    const { acceptSessionsFrame } = await SESS;
+    const r = acceptSessionsFrame({ type: 'sessions', sessions: [], complete: false, partial: true, ok: false });
+    assert.equal(r.ok, false);
+    assert.equal(r.partial, true);
+    assert.deepEqual(r.list, []);
+    assert.match(r.why, /不完整/);
+  });
+
+  it('complete:false 带 counts → why 含 N/M，条目保留', async () => {
+    const { acceptSessionsFrame } = await SESS;
+    const r = acceptSessionsFrame({
+      type: 'sessions',
+      sessions: [{ key: 'a', state: 'running' }, { key: 'b', state: 'unknown' }],
+      complete: false, partial: true, ok: false,
+      counts: { observed: 1, unknown: 1, errors: 1 },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(r.partial, true);
+    assert.equal(r.list.length, 2);
+    assert.equal(r.counts.observed, 1);
+    assert.match(r.why, /观察到 1，未知 1，错误 1/);
+  });
+
   it('其它 type 跳过，不当成 sessions 帧', async () => {
     const { acceptSessionsFrame } = await SESS;
     const r = acceptSessionsFrame({ type: 'state' });

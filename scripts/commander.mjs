@@ -250,16 +250,14 @@ function scanSessions() {
   }
   const r = spawnSync(process.execPath, [script], {
     windowsHide: true, encoding: 'utf8', timeout: 40000, cwd: ROOT,
-    // 15s 在本机仍会偶发超时，指挥官整轮把 incomplete 当成「名单没查成」放过。
-    env: { ...process.env, MIRASIM_LS_TIMEOUT_MS: process.env.MIRASIM_LS_TIMEOUT_MS || '30000' },
+    // 40s 是父进程墙钟，不许加大来掩盖子层组合预算缝隙（#1397）。
+    // 子进程端到端预算 38s，含建连/名单/快照回退/收尾，剩下给打印和退出。
+    env: {
+      ...process.env,
+      MIRASIM_LS_TIMEOUT_MS: process.env.MIRASIM_LS_TIMEOUT_MS || '30000',
+      DAO_EXECUTION_SCAN_BUDGET_MS: process.env.DAO_EXECUTION_SCAN_BUDGET_MS || '38000',
+    },
   });
-  if (r.error) return { scanned: false, error: `会话名单起不来：${r.error.message}` };
-  if (r.status !== 0) {
-    return {
-      scanned: false,
-      error: String(r.stderr || r.stdout || `mirasim-sessions exit ${r.status}`).trim().slice(0, 240),
-    };
-  }
   let frame = null;
   for (const line of String(r.stdout || '').split(/\r?\n/)) {
     const t = line.trim();
@@ -270,13 +268,30 @@ function scanSessions() {
     }
     const accepted = acceptSessionsFrame(obj);
     if (accepted.skip) continue;
-    if (!accepted.ok) return { scanned: false, error: accepted.why };
+    if (!accepted.ok) {
+      return {
+        scanned: false,
+        partial: accepted.partial === true,
+        items: Array.isArray(accepted.list) ? accepted.list : undefined,
+        stages: accepted.stages || undefined,
+        errors: accepted.errors || undefined,
+        counts: accepted.counts || undefined,
+        error: accepted.why,
+      };
+    }
     frame = accepted;
   }
   if (!frame) {
+    if (r.error) return { scanned: false, error: `会话名单起不来：${r.error.message}` };
+    if (r.status !== 0) {
+      return {
+        scanned: false,
+        error: String(r.stderr || r.stdout || `mirasim-sessions exit ${r.status}`).trim().slice(0, 240),
+      };
+    }
     return { scanned: false, error: '会话名单没打 type=sessions 协议帧（零输出/坏形状）——观测面没查成，不许折成空名单' };
   }
-  return { scanned: true, items: frame.list };
+  return { scanned: true, items: frame.list, stages: frame.stages || undefined, counts: frame.counts || undefined };
 }
 
 /**

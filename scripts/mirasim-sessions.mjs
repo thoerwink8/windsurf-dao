@@ -29,7 +29,8 @@ function bail(why) {
   process.exit(2);
 }
 
-/** sessions 帧形状闸。不是数组（含 null）= 没查成，不许折成 []。其它 type 跳过。 */
+/** sessions 帧形状闸。不是数组（含 null）= 没查成，不许折成 []。其它 type 跳过。
+ *  complete:false / partial / ok:false 也是没查成：有条目只作诊断，不许当完整观测集。 */
 export function acceptSessionsFrame(f) {
   if (!f || f.type !== 'sessions') return { skip: true };
   if (!Array.isArray(f.sessions)) {
@@ -38,7 +39,25 @@ export function acceptSessionsFrame(f) {
       why: `sessions 帧 sessions 不是数组（${f.sessions == null ? 'null' : typeof f.sessions}）——没查成，不许折成空名单`,
     };
   }
-  return { ok: true, list: f.sessions };
+  const complete = f.complete !== false && f.partial !== true && f.ok !== false;
+  if (!complete) {
+    const counts = f.counts && typeof f.counts === 'object' ? f.counts : null;
+    const why = typeof f.why === 'string' && f.why.trim()
+      ? f.why
+      : (counts && Number.isInteger(counts.observed)
+        ? `会话名单不完整：观察到 ${counts.observed}，未知 ${counts.unknown}，错误 ${counts.errors}——没查成，不许折成完整空名单`
+        : '会话名单不完整（partial/超时）——没查成，不许折成完整空名单');
+    return {
+      ok: false,
+      partial: true,
+      list: f.sessions,
+      stages: f.stages || null,
+      errors: Array.isArray(f.errors) ? f.errors : [],
+      counts,
+      why,
+    };
+  }
+  return { ok: true, list: f.sessions, stages: f.stages || null, counts: f.counts || null };
 }
 
 function readToken() {
