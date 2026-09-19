@@ -153,3 +153,33 @@ test('应用重查：只关判「可关」的，带证据进 closed，其余原�
   assert.equal(r.closed[1].closedAt, NOW);
   assert.equal(r.closed[0].fingerprint, 'old');
 });
+
+test('出口前清算：还开着的债没清算 → 红；关掉或显式接受之后 → 绿', async () => {
+  const { judgeDebtExit } = await MOD;
+  const open = [{ fingerprint: 'aaaa', file: 'a.mjs', line: 1, type: 'perf', severity: 'P2' }];
+  const red = judgeDebtExit({ items: open, accepted: [], closed: [] });
+  assert.equal(red.state, 'red');
+  assert.match(red.why, /没清算/);
+  assert.equal(judgeDebtExit({ items: [], accepted: [{ fingerprint: 'aaaa' }], closed: [] }).state, 'green');
+  assert.equal(judgeDebtExit({ items: [], accepted: [], closed: [{ fingerprint: 'aaaa' }] }).state, 'green');
+  assert.equal(judgeDebtExit({ items: null, accepted: [], closed: [] }).state, 'unscanned');
+  assert.equal(judgeDebtExit({ items: [], accepted: null, closed: [] }).state, 'unscanned');
+});
+
+test('显式接受：必须带理由（C2）；指纹找不到不许瞎改', async () => {
+  const { acceptDebt } = await MOD;
+  const items = [{ fingerprint: 'd71db24b13a913b2', file: 'a.mjs', line: 1, type: 'perf', severity: 'P2' }];
+  assert.equal(acceptDebt({ items, accepted: [], fingerprint: 'd71db24b', reason: '' }).ok, false);
+  assert.match(acceptDebt({ items, accepted: [], fingerprint: 'd71db24b', reason: '' }).error, /必须写理由/);
+  assert.equal(acceptDebt({ items, accepted: [], fingerprint: '', reason: 'x' }).ok, false);
+  assert.equal(acceptDebt({ items, accepted: [], fingerprint: 'deadbeef', reason: '本仓不适用' }).ok, false);
+
+  const ok = acceptDebt({ items, accepted: [], fingerprint: 'd71db24b', reason: '这条是误报，已人工核过', now: NOW });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.items.length, 0);
+  assert.equal(ok.accepted.length, 1);
+  assert.equal(ok.accepted[0].acceptedReason, '这条是误报，已人工核过');
+  assert.equal(ok.accepted[0].acceptedAt, NOW);
+  // 接受不改指纹与位置——判例要能追溯
+  assert.equal(ok.accepted[0].fingerprint, 'd71db24b13a913b2');
+});
