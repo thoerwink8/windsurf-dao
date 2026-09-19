@@ -13,8 +13,10 @@ test('清单每一项都有 id / 组 / 为什么 / 装法 / 探测函数', async
     assert.equal(typeof item.id, 'string');
     assert.ok(item.id.length > 0, 'id 不能为空');
     assert.equal(typeof item.group, 'string');
-    assert.ok(item.why && item.why.length > 5, `${item.id} 没写清为什么需要`);
-    assert.ok(item.how && item.how.length > 2, `${item.id} 没写装法指针`);
+    assert.equal(typeof item.why, 'string', `${item.id} 的 why 不是字符串`);
+    assert.ok(item.why.length > 5, `${item.id} 没写清为什么需要`);
+    assert.equal(typeof item.how, 'string', `${item.id} 的 how 不是字符串`);
+    assert.ok(item.how.length > 2, `${item.id} 没写装法指针`);
     assert.equal(typeof item.probe, 'function', `${item.id} 没有探测函数`);
   }
 });
