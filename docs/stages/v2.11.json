@@ -122,6 +122,39 @@
       "债单按 文件:行:类型 指纹去重，同一处只累加计数",
       "每周批量还债由 fleet 自己跑，用成本高效的腿",
       "出口判据：债还清或显式接受（带理由）"
-    ]
+    ],
+    "axes": [
+      "严重度 P1/P2/P3（不变）",
+      "类型 security|data|contract|correctness|perf|maintainability|ui",
+      "可达性（只对 security/data：生产可达？）"
+    ],
+    "sla": {
+      "note": "类型 × 严重度 → 到期日；超期进 repo-hygiene 红。类型优先于严重度：安全/数据类不许静默搁置。",
+      "immediate": [
+        "security(可达) P1/P2",
+        "data P1/P2",
+        "contract P1",
+        "correctness P1",
+        "perf P1",
+        "maintainability P1",
+        "ui P1"
+      ],
+      "withinOneWeek": [
+        "security(可达) P3",
+        "security(不可达) P2",
+        "data P3",
+        "contract P2/P3",
+        "correctness P2/P3"
+      ],
+      "withinTwoWeeks": [
+        "perf P2"
+      ],
+      "debtBatch": [
+        "maintainability P2/P3",
+        "ui P2/P3",
+        "perf P3"
+      ]
+    },
+    "modelContract": "审查输出加 type 字段（枚举）；SLA 矩阵在代码里算，不由模型判期限（模型只分类，代码算期限）。"
   }
 }
