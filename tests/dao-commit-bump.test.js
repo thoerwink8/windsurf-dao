@@ -10,7 +10,7 @@ const { spawnSync } = require('node:child_process');
 const REPO = path.resolve(__dirname, '..');
 const BUMP = path.join(REPO, 'host', 'skills', 'dao-commit', 'bump.mjs');
 const SKILL = path.join(REPO, 'host', 'skills', 'dao-commit', 'SKILL.md');
-const CLAUDE = path.join(REPO, 'CLAUDE.md');
+const BRIDGE_LIB = path.join(REPO, 'scripts', 'lib', 'resident-bridge.mjs');
 const LOAD = import('file://' + BUMP.replace(/\\/g, '/'));
 
 describe('dao-commit-bump', () => {
@@ -21,11 +21,15 @@ describe('dao-commit-bump', () => {
     await t.test('host/skills/dao-commit/bump.mjs 在', () => {
       assert.ok(fs.existsSync(BUMP), 'bump.mjs 缺失 ⇒ skill 动作序列调不到纯函数');
     });
-    await t.test('CLAUDE.md 指向 host/skills/dao-commit/SKILL.md', () => {
-      const txt = fs.readFileSync(CLAUDE, 'utf8');
+    await t.test('常驻面指向 host/skills/dao-commit/SKILL.md（走一行桥解析）', async () => {
+      // 常驻面已统一：AGENTS.md 是真相源，CLAUDE.md 只是一行 @AGENTS.md 桥。
+      // 按最终承载内容的文件判，别按文件名判。
+      const { resolveResident } = await import('file://' + BRIDGE_LIB.replace(/\\/g, '/'));
+      const r = resolveResident(REPO, 'CLAUDE.md');
+      assert.ok(!r.missing, '常驻面读不到  →  ' + (r.error || ''));
       assert.ok(
-        txt.includes('host/skills/dao-commit/SKILL.md'),
-        'CLAUDE.md 丢了指针 ⇒ 按需入口消失',
+        String(r.text).includes('host/skills/dao-commit/SKILL.md'),
+        '常驻面丢了指针 ⇒ 按需入口消失',
       );
     });
     await t.test('bump.mjs 不引用 windsurf-dao 仓内脚本', () => {

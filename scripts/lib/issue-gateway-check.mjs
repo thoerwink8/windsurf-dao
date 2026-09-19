@@ -8,6 +8,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { INSTALL_FILES } from './commander-inventory.mjs';
+import { resolveResident } from './resident-bridge.mjs';
 
 export const HOST_SURFACES = [
   { id: 'claude-settings', rel: '.claude/settings.json', kind: 'hook-json', must: 'dispatch-gate' },
@@ -99,6 +100,16 @@ function checkResidentMd(loaded, surface) {
   return { ok: true, id: surface.id };
 }
 
+/** 一行桥（CLAUDE.md = @AGENTS.md）时按目标文件判——桥自己不承载内容。 */
+function checkResidentMdResolved(root, files, loaded, surface) {
+  if (loaded.missing) return checkResidentMd(loaded, surface);
+  const eff = resolveResident(root || '', surface.rel, files);
+  if (eff.missing) {
+    return { fail: [`宿主面 ${surface.id} 的一行桥断了：${surface.rel}`, '桥目标必须在；断了等于这条常驻面没有内容', eff.error || ''] };
+  }
+  return checkResidentMd({ text: eff.text }, surface);
+}
+
 /**
  * @returns {{green?: string, fail?: [string, string, string], scanned?: number, hits?: object[]}}
  */
@@ -112,7 +123,7 @@ export function checkIssueGatewaySurfaces({ root, files, surfaces } = {}) {
   let scanned = 0;
   for (const surface of list) {
     const loaded = readRel(root || '', surface.rel, files);
-    const r = surface.kind === 'hook-json' ? checkHookJson(loaded, surface) : checkResidentMd(loaded, surface);
+    const r = surface.kind === 'hook-json' ? checkHookJson(loaded, surface) : checkResidentMdResolved(root, files, loaded, surface);
     if (r.fail) problems.push(r.fail[0]);
     else scanned += 1;
   }
