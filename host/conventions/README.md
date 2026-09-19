@@ -18,7 +18,11 @@
 4. 硬手段只有一条：fleet 拒绝在不符合的子仓起任务（本仓唯一能单方面执行的）。
 
 **自下而上（子仓 → 本仓）**：子仓交卷时 PR 正文写 `## 回流` 段；本仓处置（收 / 不收带理由）。
-收件箱与超时闸见 `host/reflow/`（T37 ②，另一步）。
+收件箱与超时闸见 `host/reflow/`。
+
+**子仓接得怎么样**：`host/machine/child-repos.json` 声明子仓清单，`node scripts/conformance.mjs` 出三态报告。
+**报告红 = 子仓未接**（确定不存在），**没查成 = 取不到**（网络/权限）——两者不许混。
+2026-09-19 第一次跑：0/4 符合（四个子仓都还没接）——这是实话，不是故障。
 
 ## 怎么验
 
@@ -26,6 +30,7 @@
 |---|---|---|
 | 真相源自己的戳与内容对得上、条数 ≤ 7 | `node host/conventions/stamp.mjs` | 绿/红/没查成三态 |
 | 子仓的块与 pin 对得上、豁免都带理由 | `node host/conventions/kit/check-conventions.mjs --repo <子仓>` | 退出码 0/1/2 |
+| **本仓读子仓**的符合性（声明的子仓清单） | `node scripts/conformance.mjs` | 三态；清单在 `host/machine/child-repos.json` |
 | 改过 `core.md` 之后 | `node host/conventions/stamp.mjs --write` | 重算戳（version 不动，升版由人改 `conventions.json`） |
 
 **「已安装」不是证据**：故意把某子仓的戳改旧，必须当场红——这是上线证据（判例：C6）。
