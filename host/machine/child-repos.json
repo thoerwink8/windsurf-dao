@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "updated": "2026-09-19",
+  "_note": "声明的子仓清单：仓名 + 必须满足项 + 豁免。本仓是约定的唯一真相源（host/conventions/），子仓只拿副本；符合性由 scripts/conformance.mjs 读这里跑三态报告。",
+  "_why": "2026-09-19 用户提「本仓和子仓不应该完全相同，但很多其实应该遵守吧」→ 三原则（Golden Path：共性做默认、个性留空间、豁免要留痕）。本仓与子仓不同仓、不同 CI、不同 owner——**本仓无法单方面强制**，所以「保证」= 三颗牙（子仓 CI 采纳一次 / fleet 拒派不符合的子仓 / 夜间红进看板），不是强权。",
+  "_why_这 4 个": "GitHub App 的 installation 能看到 6 个仓：本仓 + 5 个。声明这 4 个是**带代码/约定**的（ai-gateway-stack 渠道与 Mirasim、windsurf-dao-memory 知识仓、miraquota-win 额度、ws-cleaner 清理工具）。miraquota-ledger 不声明——它是**账本数据仓**（派生数据，没有代码约定可谈）。",
+  "_must 的含义": "must 里的每一项都要在子仓成立，除非该仓在 exempt 里写明理由（C2：抑制必须带理由）。",
+  "repos": [
+    {
+      "fullName": "thoerwink8/ai-gateway-stack",
+      "why": "渠道 / 腿 / Mirasim relay 的执行面（本仓只写选型与读法）",
+      "must": ["convention-block"],
+      "exempt": []
+    },
+    {
+      "fullName": "thoerwink8/windsurf-dao-memory",
+      "why": "判例知识仓（memory 的真相源）",
+      "must": ["convention-block"],
+      "exempt": []
+    },
+    {
+      "fullName": "thoerwink8/miraquota-win",
+      "why": "额度账本的采集端",
+      "must": ["convention-block"],
+      "exempt": []
+    },
+    {
+      "fullName": "thoerwink8/ws-cleaner",
+      "why": "清理工具（桌面侧）",
+      "must": ["convention-block"],
+      "exempt": []
+    }
+  ]
+}
