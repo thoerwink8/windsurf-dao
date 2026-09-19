@@ -139,6 +139,41 @@ export function applyRecheck({ items = [], closed = [], resolved = [], now } = {
   return { items: items.filter((i) => !gone.has(i.fingerprint)), closed: [...closed, ...moved], closedCount: moved.length };
 }
 
+/** 显式接受一条债（带理由）——版本出口判据是「**还清或显式接受**」，接受必须留理由（C2）。 */
+export function acceptDebt({ items = [], accepted = [], fingerprint, reason, now } = {}) {
+  const fp = String(fingerprint || '').trim();
+  const why = String(reason || '').trim();
+  if (!fp) return { ok: false, error: '要给指纹（前 8 位也行）' };
+  if (!why) return { ok: false, error: '显式接受必须写理由（C2：抑制必须带理由）——没理由的接受不算接受' };
+  const hit = items.find((i) => i && typeof i.fingerprint === 'string' && (i.fingerprint === fp || i.fingerprint.startsWith(fp)));
+  if (!hit) return { ok: false, error: `账本里没有指纹 ${fp} 这条债（宁可不做，不改错的）` };
+  return {
+    ok: true,
+    items: items.filter((i) => i !== hit),
+    accepted: [...accepted, { ...hit, acceptedReason: why, acceptedAt: now }],
+  };
+}
+
+/**
+ * 出口前清算（版本出口判据，T32 ④）：每条债要么**已关**（closed，重查判「不再复现」）
+ * 要么**已显式接受**（accepted，带理由）。账本里还开着条目 → 红，点名。
+ * 三态：账本三件套不是数组 → unscanned（取不到 ≠ 没有债）。
+ */
+export function judgeDebtExit({ items, accepted, closed } = {}) {
+  if (!Array.isArray(items) || !Array.isArray(accepted) || !Array.isArray(closed)) {
+    return { state: 'unscanned', why: '账本没读成（取不到 ≠ 没有债）' };
+  }
+  if (items.length) {
+    const names = items.map((i) => (i && i.file ? `${i.file}:${i.line}` : `id:${i && i.fingerprint}`));
+    return {
+      state: 'red',
+      open: items,
+      why: `还有 ${items.length} 条债没清算（既没关也没显式接受）：${names.slice(0, 5).join(' ')}——出口前必须逐条过一遍`,
+    };
+  }
+  return { state: 'green', why: `债已清算：关闭 ${closed.length} 条、显式接受 ${accepted.length} 条` };
+}
+
 /**
  * 判账本健康：超期（有 dueAt 且已过）→ 红；条数超阈 → 红。
  * 三态：items 不是数组 / now 不是时间 → unscanned。

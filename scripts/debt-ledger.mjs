@@ -4,6 +4,8 @@
 //   node scripts/debt-ledger.mjs --record findings.json   # 把一批审查发现折进账本（同指纹累加计数）
 //   node scripts/debt-ledger.mjs --recheck                # 重查即重算：逐条看锚点/文件还在不在（只读，出口前清算用）
 //   node scripts/debt-ledger.mjs --recheck --apply        # 把判「可关」的移进 closed（带证据）
+//   node scripts/debt-ledger.mjs --accept <指纹> --reason <文>   # 显式接受一条债（必须带理由）
+//   node scripts/debt-ledger.mjs --exit                   # 出口前清算：还开着的债必须逐条过（关/显式接受）
 //   node scripts/debt-ledger.mjs                          # 查账本：超期/条数超阈 → 红
 //   node scripts/debt-ledger.mjs --json
 //
@@ -16,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { applyRecheck, debtMarker, foldFindings, judgeDebt, judgeRecheck } from './lib/debt-ledger.mjs';
+import { acceptDebt, applyRecheck, debtMarker, foldFindings, judgeDebt, judgeDebtExit, judgeRecheck } from './lib/debt-ledger.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = process.env.DAO_DEBT_REPO || 'thoerwink8/windsurf-dao';
@@ -25,14 +27,25 @@ const ledgerPath = (repo) => join(DIR, `${String(repo).replace(/[^A-Za-z0-9._-]/
 
 function readLedger(repo) {
   const p = ledgerPath(repo);
-  if (!existsSync(p)) return { ok: true, items: [], closed: [], path: p, fresh: true };
+  if (!existsSync(p)) return { ok: true, items: [], closed: [], accepted: [], path: p, fresh: true };
   try {
     const doc = JSON.parse(readFileSync(p, 'utf8'));
     if (!doc || !Array.isArray(doc.items)) return { ok: false, error: `账本形态不对：${p}` };
-    return { ok: true, items: doc.items, closed: Array.isArray(doc.closed) ? doc.closed : [], path: p, fresh: false };
+    return {
+      ok: true, items: doc.items,
+      closed: Array.isArray(doc.closed) ? doc.closed : [],
+      accepted: Array.isArray(doc.accepted) ? doc.accepted : [],
+      path: p, fresh: false,
+    };
   } catch (e) {
     return { ok: false, error: `账本读不成（${p}）：${String(e.message || e).slice(0, 120)}` };
   }
+}
+
+/** 落盘：三件套一起写（items / closed / accepted），少写一件就把另一件抹掉。 */
+function writeLedger(path, { repo, stage, now, items, closed, accepted }) {
+  mkdirSync(DIR, { recursive: true });
+  writeFileSync(path, JSON.stringify({ repo, stage, updatedAt: now, items, closed, accepted }, null, 2));
 }
 
 /** 扫当前树：git 跟踪的文件清单 + 里面的 `DAO-DEBT:<前8位>` 锚点。读不到的文件少一个标记——
@@ -67,6 +80,7 @@ function main() {
   const argv = process.argv.slice(2);
   const json = argv.includes('--json');
   const recIdx = argv.indexOf('--record');
+  const accIdx = argv.indexOf('--accept');
   const stageIdx = argv.indexOf('--stage');
   const stage = stageIdx >= 0 ? argv[stageIdx + 1] : 'v2.11';
   const repoIdx = argv.indexOf('--repo');
@@ -84,8 +98,7 @@ function main() {
     const cur = readLedger(repo);
     if (!cur.ok) { process.stdout.write(`${cur.error}——没读成，不覆盖（宁可不记，不写坏账）\n`); process.exit(1); }
     const folded = foldFindings({ items: cur.items, findings, now, sla: loadSla(stage), stage });
-    mkdirSync(DIR, { recursive: true });
-    writeFileSync(cur.path, JSON.stringify({ repo, stage, updatedAt: now, items: folded.items, closed: cur.closed }, null, 2));
+    writeLedger(cur.path, { repo, stage, now, items: folded.items, closed: cur.closed, accepted: cur.accepted });
     const known = new Set(cur.items.map((i) => i.fingerprint));
     const out = {
       repo, path: cur.path, added: folded.added, bumped: folded.bumped, skipped: folded.skipped, total: folded.items.length,
@@ -115,8 +128,7 @@ function main() {
       ? applyRecheck({ items: cur.items, closed: cur.closed, resolved: verdict.resolved, now })
       : null;
     if (applied && applied.closedCount) {
-      mkdirSync(DIR, { recursive: true });
-      writeFileSync(cur.path, JSON.stringify({ repo, stage, updatedAt: now, items: applied.items, closed: applied.closed }, null, 2));
+      writeLedger(cur.path, { repo, stage, now, items: applied.items, closed: applied.closed, accepted: cur.accepted });
     }
     const out = { repo, stage, path: cur.path, verdict, applied: applied ? applied.closedCount : 0, total: applied ? applied.items.length : cur.items.length };
     if (json) process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
@@ -129,6 +141,31 @@ function main() {
       else if (verdict.resolved.length) process.stdout.write('   要真关掉，加 --apply\n');
     }
     process.exit(verdict.state === 'green' ? 0 : 1);
+  }
+
+  // 显式接受一条债（出口判据是「还清或显式接受」）——接受必须带理由。
+  if (accIdx >= 0) {
+    const reasonIdx = argv.indexOf('--reason');
+    const reason = reasonIdx >= 0 ? argv[reasonIdx + 1] : '';
+    const done = acceptDebt({ items: cur.items, accepted: cur.accepted, fingerprint: argv[accIdx + 1], reason, now });
+    if (!done.ok) { process.stdout.write(`${json ? JSON.stringify({ ok: false, error: done.error }) : `✗ ${done.error}`}\n`); process.exit(1); }
+    writeLedger(cur.path, { repo, stage, now, items: done.items, closed: cur.closed, accepted: done.accepted });
+    const out = { repo, path: cur.path, accepted: done.accepted.length, open: done.items.length };
+    if (json) process.stdout.write(`${JSON.stringify(out, null, 2)}\n`);
+    else process.stdout.write(`✓ 已显式接受一条债（理由已留痕）：还开着 ${out.open} 条、接受 ${out.accepted} 条（${cur.path}）\n`);
+    process.exit(0);
+  }
+
+  // 出口前清算：还开着的债必须逐条过（关掉 / 显式接受），否则出口前判红。
+  if (argv.includes('--exit')) {
+    const verdict = judgeDebtExit({ items: cur.items, accepted: cur.accepted, closed: cur.closed });
+    if (json) process.stdout.write(`${JSON.stringify({ repo, stage, path: cur.path, verdict, open: cur.items.length, accepted: cur.accepted.length, closed: cur.closed.length }, null, 2)}\n`);
+    else {
+      const mark = verdict.state === 'green' ? '✓' : verdict.state === 'red' ? '✗' : '?';
+      process.stdout.write(`${mark} 出口前清算 — ${verdict.why}\n`);
+      for (const i of cur.items.slice(0, 20)) process.stdout.write(`   还开着 ${i.file ? `${i.file}:${i.line}` : `id:${i.fingerprint}`}（${i.type} ${i.severity}）\n`);
+    }
+    process.exit(verdict.state === 'green' ? 0 : verdict.state === 'red' ? 1 : 2);
   }
 
   const verdict = judgeDebt({ items: cur.items, now: Date.parse(now) });
