@@ -869,6 +869,8 @@ export async function handleCardAction(event, { store, deps, commitState = true 
  *  通讯录永远不进这条路径——假 client.userName 挂死也必须在预算内回包。 */
 const savingDecisions = new WeakMap();
 const cardUpdates = new WeakMap();
+/** #1217：hubPending 键是 messageId，不是主体@版本。按 repo#number 找已拍板——
+ *  问的是「有没有已拍板」，首次命中即可，不是拿最老 head 去比当前 head。 */
 function savedDecisionFor(store, repo, number) {
   return Object.values(store?.hubPending || {}).find(entry =>
     entry.repo === repo && Number(entry.number) === Number(number) && entry.decided?.choice);

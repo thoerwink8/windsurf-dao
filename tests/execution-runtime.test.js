@@ -434,6 +434,39 @@ linuxTest('resume uses new ACP key through the same fence and preserves task/acc
   const r=await rt.resumeSession(s.sessionKey,'continue');assert.notEqual(r.sessionKey,s.sessionKey);assert.equal(r.taskId,'same-task');assert.equal(r.resumeFrom,s.sessionKey);assert.equal(r.accountPoolId,profile.accountPoolId);assert.equal(a.calls.resume[0].options.sessionKey,r.sessionKey);
 });
 linuxTest('completion timeout is unknown rather than successful running',async t=>{const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});const s=await rt.startSession(spec(f));assert.equal((await rt.waitForCompletion(s.sessionKey,{timeoutMs:0})).status,'unknown');});
+// #1174 T6 / PR #1375 审官 P1：生产入口 createExecutionRuntime 必须走 route-aware 判据。
+// 纯函数 judgeCompletion 测过 local 可 done、cloud 缺账本 unknown，但 waitForCompletion
+// 之前只调 judgeExecutionCompletion(view)，cloud 缺账本会被直接判 done。
+linuxTest('生产入口：cloud 缺账本不得 done，local/ACP 无账本可 done',async t=>{
+  const doneView={phase:'done',text:'PONG',toolCalls:[],missing:false,error:null};
+  const unread={ledger:{readable:false,rows:[],why:'这个会话还没有账本目录'},journal:{readable:false}};
+  async function viaRuntime({route,acp}={}) {
+    const f=fixture(t),m=fakeRuntime();
+    m.crossCheck=()=>unread;
+    const a=acp?fakeRuntime():undefined;
+    const rt=runtime(f,{mirasimRuntime:m,...(a?{acpRuntime:a,profiles:[profile]}:{})});
+    const started=acp
+      ?await rt.startSession({profileId:profile.id,workdir:f.workdir,prompt:'PONG'})
+      :await rt.startSession({...spec(f),route});
+    (acp?a:m).views.set(started.sessionKey,doneView);
+    const peeked=await rt.readSession(started.sessionKey);
+    const waited=await rt.waitForCompletion(started.sessionKey,{timeoutMs:0,pollMs:1});
+    return {peeked,waited,meta:records(f)[0]};
+  }
+  const cloud=await viaRuntime({route:'cloud'});
+  assert.notEqual(cloud.waited.status,'done','cloud/relay 缺账本不得 done');
+  assert.equal(cloud.waited.status,'unknown');
+  assert.match(cloud.waited.reason,/账本|没查成/);
+  assert.notEqual(cloud.peeked.execution.observedState,'done');
+  assert.equal(cloud.meta.route,'cloud');
+  const local=await viaRuntime({route:'local'});
+  assert.equal(local.waited.status,'done');
+  assert.equal(local.peeked.execution.observedState,'done');
+  assert.equal(local.meta.route,'local');
+  const acpDone=await viaRuntime({acp:true});
+  assert.equal(acpDone.waited.status,'done');
+  assert.equal(acpDone.meta.backend,'acp');
+});
 linuxTest('readSession unknown 不许覆盖已落盘的终态',async t=>{
   const f=fixture(t),m=fakeRuntime(),rt=runtime(f,{mirasimRuntime:m});
   const started=await rt.startSession(spec(f));
@@ -507,6 +540,38 @@ linuxTest('ensureGitWorkspace refuses a bad branch name and an unregistered occu
   const squatted=path.join(dir,'mirasim-worktrees',path.basename(fs.realpathSync(repo)),'feature-squat');
   fs.mkdirSync(squatted,{recursive:true});
   assert.throws(()=>ensureGitWorkspace(repo,'feature/squat',{homeDir:dir,base:'HEAD'}),/unregistered worktree path already exists/);
+});
+
+linuxTest('ensureGitWorkspace reuses a detached review tree at its deterministic path',t=>{
+  const {dir,repo,git}=gitRepo(t);
+  const first=ensureGitWorkspace(repo,'dao/review-1-abc',{homeDir:dir,base:'HEAD'});
+  // 审查流程检出确切 HEAD 后会 detach；此时 worktree list 里只剩 detached 行。
+  git(['checkout','--detach','HEAD'],first.path);
+  const second=ensureGitWorkspace(repo,'dao/review-1-abc',{homeDir:dir,base:'HEAD'});
+  assert.equal(second.created,false);
+  assert.equal(second.path,first.path);
+});
+
+linuxTest('ensureGitWorkspace refuses a detached tree that belongs to another branch',t=>{
+  const {dir,repo,git}=gitRepo(t);
+  // slot/branch 与 slot-branch 归一化后撞同一路径：树是被别的分支 detach 的，不许复用（复核实咬）。
+  const first=ensureGitWorkspace(repo,'slot/branch',{homeDir:dir,base:'HEAD'});
+  git(['checkout','--detach','HEAD'],first.path);
+  assert.throws(()=>ensureGitWorkspace(repo,'slot-branch',{homeDir:dir,base:'HEAD'}),/unregistered worktree path already exists/);
+});
+
+linuxTest('ensureGitWorkspace refuses a detached tree with no branch marker',t=>{
+  const {dir,repo,git}=gitRepo(t);
+  const target=path.join(dir,'mirasim-worktrees',path.basename(fs.realpathSync(repo)),'legacy-slot');
+  git(['worktree','add','--detach',target,'HEAD']); // 绕过 ensureGitWorkspace 建的树没有分支标记
+  assert.throws(()=>ensureGitWorkspace(repo,'legacy/slot',{homeDir:dir,base:'HEAD'}),/unregistered worktree path already exists/);
+});
+
+linuxTest('ensureGitWorkspace still refuses the slot when a different branch occupies it',t=>{
+  const {dir,repo}=gitRepo(t);
+  // slot/branch 与 slot-branch 会算出同一个目标路径；占位者是别的分支（非 detached）时必须照旧拒绝。
+  ensureGitWorkspace(repo,'slot/branch',{homeDir:dir,base:'HEAD'});
+  assert.throws(()=>ensureGitWorkspace(repo,'slot-branch',{homeDir:dir,base:'HEAD'}),/unregistered worktree path already exists/);
 });
 
 linuxTest('ensureGitWorkspace reuses an existing branch instead of rebranching it',t=>{

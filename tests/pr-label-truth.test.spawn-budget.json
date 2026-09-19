@@ -1,0 +1,4 @@
+{
+  "budget": 4,
+  "why": "真走 dao.mjs 才能断言 gh 序列没有 issue view。进程内跑等于不验接线。"
+}

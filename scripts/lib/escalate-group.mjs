@@ -104,17 +104,14 @@ export function escalateDedupKey(action) {
 }
 
 /**
- * 开单那一轮的幂等键种子。
+ * 开单那一轮的幂等键种子（**只用于 create，不管 reopen**）。
  *
- * **为什么不能只用起因**（#1240 的另一半，2026-09-14）：网关按「动作 + 仓 + 幂等键」记账，
- * 同键永远退回**第一次**那个结果（`issue-gateway.mjs:483`）。而一张被收敛关掉的单，
- * 键还留在网关账上——同一个起因第二次真发生（带了新对象、该开新单）时，
- * 请求会被退回到那张已关的旧单，于是「重开」这件事**在网关这一层就从来没发生过**。
- * 日志说开单、线上没开单，判据那一半再对也没用。
+ * 同轮去重：同一轮两次 create 必须同键，否则会开出两张。清单有序去重，
+ * 只由「集合」决定，不由产出顺序决定。
  *
- * 折法：把**这一轮要说的对象清单**折进种子。清单变了（新对象出现）⇒ 新键 ⇒ 真能开新单；
- * 清单没变 ⇒ 同键 ⇒ 网关去重继续生效（幂等没有被削弱）。
- * 清单是有序去重的，同一轮的两次调用必得同一个键。
+ * #1240 残余定路（2026-09-18）：跨轮「是不是新发生」**不再**靠换种子回答——
+ * 已关同因单走 gateway `reopen`（见 commander.escalate），键退回只管同轮。
+ * 无对象原因的种子恒为 `open:<reason>:`，若仍拿它当重开判据，关单后永远撞旧账。
  */
 export function escalateRoundSeed(reason, objects) {
   // 去重后**排序**：键必须只由「集合」决定，不由产出顺序决定——顺序一变键就变，
@@ -123,6 +120,18 @@ export function escalateRoundSeed(reason, objects) {
     .filter((o) => o != null && String(o) !== '')
     .map(String))].sort();
   return `open:${String(reason || 'x')}:${objs.join(',')}`;
+}
+
+/** 重开留言：必须写清为什么重开——关单语里「又发生会重新开」的兑现。 */
+export function reopenCommentBody({ reason, objects, why, at }) {
+  return [
+    `指挥官：这条原因又发生了，重开本单（#1240：已关同因单按状态 reopen，不靠幂等键假装开过）。`,
+    ``,
+    `- 原因：${reason}`,
+    `- 受影响：${(objects || []).join('、') || '（没记到对象）'}`,
+    `- 本次判定：${why || ''}`,
+    at ? `\n时间：${at}` : '',
+  ].filter(Boolean).join('\n');
 }
 
 import { createHash } from 'node:crypto';
@@ -198,31 +207,25 @@ export function judgeEscalation(action, { booked = null, bookedState = null, str
     return { verdict: 'unscanned', why: `账本记着 #${booked.issue}，核不出状态——开单不可撤，本轮不开`, target };
   }
   if (bookedState !== 'OPEN') {
-    // 单被关了 = 这件事被处置过了。再发生就是新一轮，可以重开——**但只在这次有新东西可说时**。
+    // 单被关了 = 这件事被处置过了。再发生就是新一轮，必须让人再看见。
     //
-    // #1240 实咬（2026-09-13）：#1154/#930 每 20 分钟把「报帅开单 #1204」打进日志，
-    // 而 #1204 早在 09-12 就被轮末收敛关掉了。链条是：原因持续存在 → 收敛关单 →
-    // 下一轮这条判据判 open → gateway 按幂等键把旧单号退回 → 账本记的仍是 #1204 → 循环。
-    // 每一轮的「重开」都只是把同一个 #1204 报一遍，线上没有新的单，也没有新的对象。
+    // #1240 第一刀（2026-09-13）按「对象没变 → noop」挡复读日志：当时 #1154/#930
+    // 每 20 分钟把「报帅开单 #1204」打进 journal，而线上没有新单——根因是
+    // create 撞上同幂等键，gateway 把已关旧号退回。noop 治了有对象那一半的噪音。
     //
-    // 判据改按**对象**分（这才是人做事的最小单位，跟上面 append 出口同一条口径）：
-    //   · 对象没登记过 → 重开，把新对象带进正文清单一并说清（真新信息，不该被吞）
-    //   · 对象登记过   → noop，只进 status（同一件事已经说过了，再说一遍是噪音）
-    // 没有对象（term 类）时按「登记过」算：无对象可增，重开等于复读。
+    // #1240 残余（2026-09-18）：无对象原因（裸 `unscanned`）永远点不出新对象，
+    // 关单后走 noop 就永久静默——#1305 关了之后 14 次复发一条评论都没落，
+    // 关单语里那句「又发生的话会重新开一张」成了空头支票。
+    //
+    // 定路：把「跨轮是不是新发生」从幂等键上摘掉。CLOSED → 一律重开（reopen）；
+    // 幂等键只负责同轮去重。对象有没有、变没变，都不再当重开判据。
     const seen = Array.isArray(booked.objects) ? booked.objects : [];
-    if (!target || seen.includes(target)) {
-      return {
-        verdict: 'noop',
-        why: `#${booked.issue} 已关，但这次没有新对象（${target || '无对象'}）——只进 status，不复读一张已关的单`,
-        target,
-        objects: seen,
-      };
-    }
+    const objects = target && !seen.includes(target) ? [...seen, target] : seen.slice();
     return {
       verdict: 'open',
-      why: `#${booked.issue} 已关，原因又发生且带来新对象 ${target}——重开一张（不是往已关的那张上追加）`,
+      why: `#${booked.issue} 已关，原因又发生——重开（状态看 issue，不靠幂等键假装开过）`,
       target,
-      objects: [...seen, target],
+      objects,
       reopenedFrom: booked.issue,
     };
   }

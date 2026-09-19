@@ -403,6 +403,42 @@ describe('认输标签随新 head 自动摘除（自主运转的死点 A）', ()
       '要走到「同 head 同版本」这条判据上  →  ' + JSON.stringify(r.skipped));
   });
 
+  it('#1217 三条记录、最新 == 当前 head → 不许摘（#1143 原形：find 会拿最老 head 当新局面）', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const { epochOf } = await VERBS;
+    const nowEpoch = epochOf().epoch;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'NEWHEAD', [EXHAUSTED])],
+      ledger: {
+        [`pushed:100@OLD1@e${nowEpoch}`]: { pr: 100, head: 'OLD1', at: '2026-09-08T09:31:45Z' },
+        [`pushed:100@OLD2@e${nowEpoch}`]: { pr: 100, head: 'OLD2', at: '2026-09-08T10:32:05Z' },
+        [`pushed:100@NEWHEAD@e${nowEpoch}`]: { pr: 100, head: 'NEWHEAD', at: '2026-09-11T06:11:29Z' },
+      },
+      epoch: nowEpoch,
+    });
+    assert.equal(r.clears.length, 0, '最新记录就是当前 head，认输仍成立  →  ' + JSON.stringify(r));
+    assert.equal(r.skipped.some((x) => x.why === 'same-head-same-epoch'), true,
+      '要走到「同 head 同版本」  →  ' + JSON.stringify(r.skipped));
+  });
+
+  it('#1217 两条记录、最新 != 当前 head → 才摘，recordedHead 是最新不是最老', async () => {
+    const { planExhaustedLabelClear } = await EX;
+    const { epochOf } = await VERBS;
+    const nowEpoch = epochOf().epoch;
+    const r = planExhaustedLabelClear({
+      prs: [prWith(100, 'NEWHEAD', [EXHAUSTED])],
+      ledger: {
+        [`pushed:100@VERYOLD@e${nowEpoch}`]: { pr: 100, head: 'VERYOLD', at: '2026-09-08T09:31:45Z' },
+        [`pushed:100@OLDHEAD@e${nowEpoch}`]: { pr: 100, head: 'OLDHEAD', at: '2026-09-11T06:11:29Z' },
+      },
+      epoch: nowEpoch,
+    });
+    assert.equal(r.clears.length, 1, JSON.stringify(r));
+    assert.equal(r.clears[0].reason, 'new-head');
+    assert.equal(r.clears[0].recordedHead, 'OLDHEAD',
+      '必须报最新那条的 head，不是 find 拿到的最老 VERYOLD  →  ' + JSON.stringify(r.clears[0]));
+  });
+
   it('反证：账本里没有认输记录 → 不摘（没认输过就无从谈「过期」）', async () => {
     const { planExhaustedLabelClear } = await EX;
     const r = planExhaustedLabelClear({ prs: [prWith(100, 'NEWHEAD', [EXHAUSTED])], ledger: {} });

@@ -287,6 +287,7 @@ function legEvidenceFor(modelId) {
 import { planBoardTargets, formatBoardArchiveMd, boardResetVerdict } from './lib/board-reset.mjs';
 import {
   bindExecutor, readExecutorPolicy, judgeExecutorName, judgeAgentRoute,
+  startSessionRouteFields,
 } from './lib/executor-binding.mjs';
 import { judgeTestExecutorIsolation, enableRealExecutorUnlessTest } from './lib/mirasim-runtime.mjs';
 import { ensureControlPlaneHooksPath } from './lib/control-plane-write.mjs';
@@ -795,6 +796,7 @@ async function cmdDispatchMirasim(args, routing, gate) {
       agent: route.agent, workdir: tree.path, prompt,
       model: args.model, clientRef: `dao-dispatch-${args.issue ?? 'x'}-${Date.now()}`,
       ...(Number.isInteger(dispatchIssue) && dispatchIssue > 0 ? { issue: dispatchIssue } : {}),
+      ...startSessionRouteFields(route),
     });
   } catch (e) {
     // 租约被占是**背压**不是失败：树里有人在干活，排队下一轮就行。busy 原样透出去，
@@ -1935,6 +1937,11 @@ import {
   readPrHead,
   mustRecheckVerdictUnderLock,
 } from './lib/dispatch/reviewer-mirasim.mjs';
+import {
+  stopWorkerDoneSessions,
+  workerDoneCleanupFailExtra,
+  settleWorkerDoneCleanup,
+} from './lib/dispatch/worker-done-cleanup.mjs';
 
 /** 本仓主 clone 根：由本树 git-common-dir 推。跨仓不走这里，走 resolveMirasimRepoTarget。 */
 function thisCheckoutRoot() {
@@ -2433,6 +2440,13 @@ async function cmdWorkerDoneMirasim(args) {
   const postedPr = postCommentOnce({ kind: 'pr', number: plan.pr, body: plan.comment, runGh: gh });
   if (!postedPr.ok) fail(postedPr.error, { ...plan, postedIssue, postedPr });
 
+  const cleanupIdentity = {
+    pr: plan.pr,
+    issue: plan.issue,
+    headRefName: (stamped && stamped.branch) || gitBranchName(process.cwd()).branch || '',
+    mainCheckout: thisCheckoutRoot(),
+  };
+
   // #1125 主路：交卷**只入队，不起审官**。
   //
   // 病：起审官原来发生在工人交卷那一刻，于是**生产端决定了消费端的并发**——工人跑得多快，
@@ -2466,21 +2480,31 @@ async function cmdWorkerDoneMirasim(args) {
     const wrote = writeReviewPending({ dir, ticket: built.ticket });
     // 写票失败 fail-closed：报 ok 而票没落盘 = 这张 PR 从此没人管，比起审官失败更难发现。
     if (!wrote.ok) fail(wrote.error, { ...plan, postedIssue, postedPr });
-    let stopped = { ok: true, skipped: true };
-    try {
-      stopped = await stopSessionsAtCwd(bind.runtime, process.cwd());
-    } catch (e) {
-      fail(`交卷后停会话没查成：${e && e.message ? e.message : e}`, { ...plan, postedIssue, postedPr });
-    }
+    const reviewPending = { path: wrote.path, source: built.ticket.source };
+    const stopped = await cleanupAfterWorkerDone(bind.runtime, cleanupIdentity, {
+      postedIssue, postedPr, action: 'queued-for-review', reviewPending,
+    });
     emit({
       ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
       mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
       postedIssue, postedPr, action: 'queued-for-review',
-      reviewPending: { path: wrote.path, source: built.ticket.source },
+      reviewPending,
       stopped,
       why,
     });
   };
+  if (plan.halt) {
+    const stopped = await cleanupAfterWorkerDone(bind.runtime, cleanupIdentity, {
+      postedIssue, postedPr, action: plan.halt,
+    });
+    emit({
+      ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
+      mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
+      postedIssue, postedPr, action: plan.halt, stopped,
+      why: plan.haltWhy || String(plan.halt),
+    });
+    return;
+  }
   if (plan.round === 'first') {
     await enqueueHandoff('首审已入待审队列，由指挥官按在役审官数拉取（#1125）——工人不再自己起审官');
     return;
@@ -2515,12 +2539,9 @@ async function cmdWorkerDoneMirasim(args) {
     }),
   });
   if (!res.ok) fail(res.error, { executor: 'mirasim', stage: res.stage, ...res, postedIssue, postedPr });
-  let stopped = { ok: true, skipped: true };
-  try {
-    stopped = await stopSessionsAtCwd(bind.runtime, process.cwd());
-  } catch (e) {
-    fail(`交卷后停会话没查成：${e && e.message ? e.message : e}`, { ...plan, postedIssue, postedPr });
-  }
+  const stopped = await cleanupAfterWorkerDone(bind.runtime, cleanupIdentity, {
+    postedIssue, postedPr, action: res.action,
+  });
   emit({
     ok: true, executor: 'mirasim', commentPosted: true, settled: false, ...plan,
     mergePolicy: books.mergePolicy, mergeReason: books.mergeReason, mergePolicySource: books.source,
@@ -2596,6 +2617,7 @@ async function cmdStartMirasim(args) {
       ...(issue ? { issue } : {}),
       ...(pr ? { pr } : {}),
       ...(title ? { title } : {}),
+      ...startSessionRouteFields(route),
     });
   } catch (e) {
     fail(`mirasim 起会话失败: ${String(e?.message || e)}`, {
@@ -2641,42 +2663,27 @@ async function cmdSessionRead(args) {
   });
 }
 
-/** 停掉 cwd 落在这棵树上的会话。交卷后树留着、进程必须走。没清单或没有匹配 = 扫过 0 条，不是失败。 */
-async function stopSessionsAtCwd(runtime, cwd) {
-  const want = String(cwd || '').replace(/\\/g, '/').replace(/\/+$/, '');
-  if (!want) return { ok: false, unscanned: true, error: '停会话没给 cwd', stopped: [] };
-  if (!runtime || typeof runtime.listSessions !== 'function') {
-    return { ok: false, unscanned: true, error: 'runtime 没有 listSessions', stopped: [] };
-  }
-  const listed = await runtime.listSessions();
-  if (!listed || listed.ok === false) {
-    return {
-      ok: false, unscanned: true,
-      error: (listed && listed.error) || '会话清单没查成',
-      stopped: [],
-    };
-  }
-  const sessions = Array.isArray(listed.sessions) ? listed.sessions : [];
-  const hits = sessions.filter((s) => {
-    const cwd = String((s && (s.cwd || s.workdir || s.worktree)) || '').replace(/\\/g, '/').replace(/\/+$/, '');
-    return cwd && (cwd === want || cwd.startsWith(`${want}/`));
+/**
+ * 交卷后停本 PR 工人会话。树留着。
+ * 必须带 PR 身份：裸 cwd 前缀会把主树下嵌套 worktree 一并停掉（#1400）。
+ * 主树 / 审官树 / 别人的工人树在 list 之前拒绝。stop 失败 fail-visible，评论回执留下。
+ */
+async function stopSessionsAtCwd(runtime, cwd, identity) {
+  return stopWorkerDoneSessions(runtime, cwd, identity, {
+    stopOne: (key, workdir) => stopSessionAndReap(runtime, key, { workdir }),
   });
-  const stopped = [];
-  for (const s of hits) {
-    const key = s.sessionKey || s.key || s.id;
-    if (!key) continue;
-    try {
-      const r = await stopSessionAndReap(runtime, key, { workdir: cwd });
-      stopped.push({ sessionKey: key, ok: !!(r && r.ok), why: r && r.why });
-    } catch (e) {
-      stopped.push({ sessionKey: key, ok: false, why: String(e && e.message ? e.message : e) });
-    }
+}
+
+async function cleanupAfterWorkerDone(runtime, identity, receipts = {}) {
+  let stopped;
+  try {
+    stopped = await stopSessionsAtCwd(runtime, process.cwd(), identity);
+  } catch (e) {
+    fail(`交卷后停会话没查成：${e && e.message ? e.message : e}`, workerDoneCleanupFailExtra(null, receipts));
   }
-  const failed = stopped.filter((x) => x.ok !== true);
-  if (failed.length) {
-    return { ok: false, error: `有 ${failed.length} 个会话没停成`, stopped, scanned: hits.length };
-  }
-  return { ok: true, stopped, scanned: hits.length };
+  const settled = settleWorkerDoneCleanup(stopped, receipts);
+  if (!settled.ok) fail(settled.error, settled.extra);
+  return settled.stopped;
 }
 
 async function cmdSessionStop(args) {

@@ -1,82 +1,476 @@
 // scripts/lib/spawn-budget.mjs —— 测试里起子进程的预算闸
 //
 // 来历（2026-09-06 用户拍板「两刀都要做，但后面肯定会忘记」）：
-// 第二刀是把 196 处 `spawnSync(node, [CLI, ...])` 改成进程内调用——
-// 实测每次 spawn ≈ 52-120ms，196 处光启动费就 ~23s，是全量测试 27s 的主体。
-// 这活量大、要逐处判断「这条断言还需不需要 CLI 边界」，做不完一轮。
+// 第二刀是把 `spawnSync(node, [CLI, ...])` 改成进程内调用。
+// 防忘不靠记性，靠一条会响的闸：每个测试文件自己声明允许的调用数，超了就报。
 //
-// **防忘不靠记性，靠一条会响的闸**：预算写死在这里，超了就报。
-// 第二刀往下做，预算跟着降；一直没做，它一直响。
+// 2026-09-18 #1399：公共 `SPAWN_BUDGET` 数字 + `BUDGET_NOTE` 历史长串
+// 是无关 PR 的人造冲突源（#1322 与 #1359 都把 159 改成 160，正确合计是 161）。
+// 预算声明与测试文件同域（tests/<名>.spawn-budget.json），检查器运行时汇总。
+// 独立模块加 spawn 只改自己那份声明，不再改公共数字/列表尾。
 //
-// 为什么是「上限」不是「必须减少」：新增测试合理地需要 spawn 时不该被拦死，
-// 只是要看得见总量。降预算是显式动作——改这个数字本身就是一次记账。
+// 上限语义仍在：实际调用不得超过该文件声明；未声明、声明删了、坏 JSON、
+// 扫描 0 文件都不能报绿。不把实际观测数当预算，不自动扩容，不关闸。
+// 历史在 git / PR，不把流水账拼回运行时代码。
+// 第二刀往下做：把对应文件的 budget 改小。目标 ≤40。
 
-/** 当前允许的 spawnSync 调用总数。第二刀每做一批就把这个数改小，不许只加不减。 */
-export const SPAWN_BUDGET = 162;
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+/** 第二刀的目标总量。不是闸，也不许拿它当「实际多少就准多少」的自动放宽。 */
+export const SECOND_CUT_TARGET = 40;
+
+export const DECL_SUFFIX = '.spawn-budget.json';
 
 /**
- * 数的是**调用**，不是「提到」。
- * 2026-09-06 首版按 /spawnSync/ 计数，结果本闸自己的测试文件里
- * `import { classifySpawnBudget }` 那行、注释里写的 `spawnSync` 全被算进去，
- * 总数凭空多出几处——判据把「提到」当成了「使用」，这类闸最典型的假阳性。
- * 只认后面紧跟 `(` 的形态。
+ * 调用形态（标识符 + 括号）。不要拿它扫原文：注释和字符串里的同形文本不是调用。
+ * 计数走 countSpawnCalls 的词法扫描。
  */
 export const SPAWN_CALL_RE = /\bspawnSync\s*\(/g;
 
-export function countSpawnCalls(source) {
-  return (String(source).match(SPAWN_CALL_RE) || []).length;
+export const TEST_FILE_RE = /\.test\.(js|mjs|cjs)$/i;
+
+const SPAWN_IDENT = 'spawnSync';
+
+function isIdentChar(c) {
+  return c != null && ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c === '_' || c === '$');
 }
 
-/** 预算的由来与目标，报警时原样打给人看——只报数字没人知道该怎么办。 */
-export const BUDGET_NOTE = '第二刀做到 134；合入 dao now 测试 +3、再合 master board-gc/stall 测试 +2，预算 139；#982 卡 B 绑定层 CLI 黑盒（executor-binding.test.js 公开 CLI 不许崩栈 / 任务书路由 / 未登记家族拒派）+6，预算 145；#967 返工补缺 targets fail-closed 的 CLI 样本 +1，预算 146。dao.test 早退型已转完（-18），'
-  + '#1174 ACP 接入 +6（acp-runtime 跨进程验 /proc 身份与 flock ×2、execution-runtime 跨进程验 flock ×1、execution-usage CLI 黑盒 ×3），'
-  + '吃掉 5 格余量后溢出 1，预算 147——这 6 处验的就是「另一个进程里会怎样」，进程内跑等于不验，故记账不改测；'
-  + '#1116 CLI 选型入口夹具 +1（pr-label-truth 真走 dao.mjs 才能断言 gh 序列没有 issue view，进程内跑等于不验接线），预算 148；'
-  + '#1146 skills 装载面 CLI 黑盒 +3（onboard.mjs 整目录劫持 e2e ×1、skills-heal.mjs 被劫 exit 0 / 没查成 exit 2 ×2），'
-  + '验的是 systemd 认的退出码和 onboard 真把 skills-elsewhere 接上，进程内跑等于不验 CLI 边界，预算 151；'
-  + '#1165 控制面闸现役 git push / land.mjs 真推送黑盒 +2，预算 153；'
-  + '孤儿测试进程闸 +3（test-child-guard 验预加载装上之后的真实进程行为：爹活着时一个字不打印 ×1、'
-  + '没记 owner pid 时 no-op ×1、爹没了时自己退出且退出码认得出 ×1），吃掉 2 格余量后溢出 1，预算 154——'
-  + '这一闸的判据就是「另一个进程的寿命」，进程内跑等于不验；造死 pid 那一处已复用上一条的返回值省掉；'
-  + '合入 origin/master 的 dropped-deepseek-ops 现行指针 grep 黑盒 +1，预算 155——'
-  + '扫的是整树现行文档，进程内跑等于不验检索面；'
-  + '#1291/#1292 起会话占用锁（dispatch-lock.test.js 跨进程占锁 / #1228 账本闭环黑盒）+1，预算 156——'
-  + '验的是另一进程持锁时本进程被拒，进程内跑等于不验；'
-  + 'master #1328 同期把同一格补进账：#1288 落那一刻总数已是 156、预算却写成 155，'
-  + '差 1 记在账外挡住全部 PR 的 CI（#1324 就卡在这）。两边到的是同一格 156，不另加；'
-  + '第二刀往下做时仍要把这个数改小，不许只加不减。'
-  + '#1226 落地 #1146 的 skills 装载面 CLI 黑盒 +3（onboard 整目录劫持 e2e ×1、'
-  + 'skills-heal 被劫 exit 0 / 没查成 exit 2 ×2），预算 159——上面「预算 151」那段叙述'
-  + '写的就是这 3 处，当时只记了账没落测试；本次测试随 #1226 真正进 master，账实对齐。'
-  + '#1359 审官加席 CLI 黑盒 +1（reviewer-create --dry-run 必须真走 dao.mjs 才能看见新席位进选型），预算 160。'
-  + '#1174 T7 返工 --only 跳过退役池仍留旧绿：主流程 CLI 黑盒 +1（gw-remote-probe --only 必须真起进程写健康表，进程内跑等于不验落盘），预算 161。'
-  + '#1408 返工：上机钩子黑盒 +1（dao-install-units.sh 必须真跑 bash 才能证明恶意 User=/ExecStart= 装不进 DEST，进程内跑等于不验钩子），预算 162。'
-  + '剩下的是真建树/真发请求的动词，进程内跑会共享模块状态互相污染，转它们要先隔离状态；目标 ≤40';
+function skipLineComment(s, i, n) {
+  i += 2;
+  while (i < n && s[i] !== '\n' && s[i] !== '\r') i++;
+  return i;
+}
+
+function skipBlockComment(s, i, n) {
+  i += 2;
+  while (i + 1 < n && !(s[i] === '*' && s[i + 1] === '/')) i++;
+  return i + 1 < n ? i + 2 : n;
+}
+
+function skipQuoted(s, i, n, quote) {
+  i += 1;
+  while (i < n) {
+    if (s[i] === '\\') { i += 2; continue; }
+    if (s[i] === quote) return i + 1;
+    i++;
+  }
+  return n;
+}
+
+function isWs(c) {
+  return c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '\f' || c === '\v';
+}
+
+/** spawnSync 与 ( 之间只允许空白和注释。 */
+function skipWsComments(s, i, n) {
+  while (i < n) {
+    const c = s[i];
+    if (isWs(c)) { i++; continue; }
+    if (c === '/' && s[i + 1] === '/') {
+      i = skipLineComment(s, i, n);
+      continue;
+    }
+    if (c === '/' && s[i + 1] === '*') {
+      i = skipBlockComment(s, i, n);
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+function skipRegex(s, i, n) {
+  i += 1;
+  let inClass = false;
+  while (i < n) {
+    const c = s[i];
+    if (c === '\\') { i += 2; continue; }
+    if (c === '[' && !inClass) { inClass = true; i++; continue; }
+    if (c === ']' && inClass) { inClass = false; i++; continue; }
+    if (c === '/' && !inClass) {
+      i++;
+      while (i < n && isIdentChar(s[i])) i++;
+      return i;
+    }
+    if (c === '\n' || c === '\r') return i;
+    i++;
+  }
+  return n;
+}
+
+const REGEX_AFTER_KEYWORD = new Set([
+  'return', 'case', 'throw', 'new', 'typeof', 'void', 'delete',
+  'await', 'yield', 'in', 'of', 'instanceof',
+]);
 
 /**
- * @param {{file:string,count:number}[]} counts 每个测试文件的 spawnSync 出现次数
- * @returns {{state:'ok'|'red'|'unknown', detail:string, total?:number}}
+ * 数的是**调用**，不是「提到」。
+ * 2026-09-06 首版按 /spawnSync/ 计数，import 行和注释里的字都被算进去。
+ * 2026-09-18 #1405 审官 P1：`\bspawnSync\s*\(` 扫原文，仍会把 `// spawnSync(`
+ * 和 `"spawnSync("` 当成调用。词法扫描跳过注释、引号串、模板字面量；
+ * 模板插值 `${...}` 里的代码照数（那是真调用）。
+ * 正则字面量也要跳过：`/["'].../` 若不跳，里面的引号会把后面的真调用吞掉。
  */
-export function classifySpawnBudget(counts) {
-  if (!Array.isArray(counts)) return { state: 'unknown', detail: '扫描结果不是数组（没查成）' };
-  if (counts.length === 0) {
-    // 「一个文件都没扫到」和「扫完 0 处 spawn」必须分开：前者是扫描面坏了。
-    return { state: 'unknown', detail: '一个测试文件都没扫到——没查成，不是「没有 spawn」' };
+export function countSpawnCalls(source) {
+  const s = String(source);
+  const n = s.length;
+  let i = 0;
+  let count = 0;
+  const stack = [{ kind: 'code', braces: 0 }];
+  // 'Z' = 上一枚是值（标识符/数字/字符串/正则/模板/)/]），否则是那一枚标点。
+  let lastSig = '';
+  let lastWord = '';
+
+  function noteValue(word) {
+    lastSig = 'Z';
+    lastWord = word || '';
   }
-  const total = counts.reduce((s, c) => s + (Number(c.count) || 0), 0);
-  if (total > SPAWN_BUDGET) {
-    const top = [...counts].sort((a, b) => b.count - a.count).slice(0, 3).map((c) => `${c.file}×${c.count}`).join('、');
-    return {
-      state: 'red',
-      total,
-      detail: `测试里 spawnSync ${total} 处，超预算 ${SPAWN_BUDGET}（${BUDGET_NOTE}）。大头：${top}`,
-    };
+  function notePunct(ch) {
+    lastSig = ch;
+    lastWord = '';
+  }
+  function slashIsRegex() {
+    if (!lastSig) return true;
+    if (lastSig === 'Z') return REGEX_AFTER_KEYWORD.has(lastWord);
+    return '([{,;=!&|?:~^%*+-'.includes(lastSig);
+  }
+
+  while (i < n) {
+    const ctx = stack[stack.length - 1];
+    const c = s[i];
+    const c2 = s[i + 1];
+
+    if (ctx.kind === 'code') {
+      if (c === '/' && c2 === '/') {
+        i = skipLineComment(s, i, n);
+        continue;
+      }
+      if (c === '/' && c2 === '*') {
+        i = skipBlockComment(s, i, n);
+        continue;
+      }
+      if (c === '/') {
+        if (slashIsRegex()) {
+          i = skipRegex(s, i, n);
+          noteValue('');
+          continue;
+        }
+        notePunct('/');
+        i++;
+        continue;
+      }
+      if (c === "'" || c === '"') {
+        i = skipQuoted(s, i, n, c);
+        noteValue('');
+        continue;
+      }
+      if (c === '`') {
+        stack.push({ kind: 'template' });
+        i++;
+        continue;
+      }
+      if (c === '{') { ctx.braces++; notePunct('{'); i++; continue; }
+      if (c === '}') {
+        if (ctx.braces > 0) ctx.braces--;
+        else if (stack.length > 1) stack.pop();
+        notePunct('}');
+        i++;
+        continue;
+      }
+      if (c === 's' && s.startsWith(SPAWN_IDENT, i)) {
+        const prev = i > 0 ? s[i - 1] : '';
+        const afterPos = i + SPAWN_IDENT.length;
+        const after = afterPos < n ? s[afterPos] : '';
+        if (!isIdentChar(prev) && !isIdentChar(after)) {
+          const j = skipWsComments(s, afterPos, n);
+          if (j < n && s[j] === '(') count++;
+        }
+        noteValue(SPAWN_IDENT);
+        i += SPAWN_IDENT.length;
+        continue;
+      }
+      if (isWs(c)) { i++; continue; }
+      if (isIdentChar(c)) {
+        lastWord = lastSig === 'Z' && lastWord ? lastWord + c : c;
+        lastSig = 'Z';
+        i++;
+        continue;
+      }
+      notePunct(c);
+      i++;
+      continue;
+    }
+
+    if (c === '\\') { i += 2; continue; }
+    if (c === '`') {
+      stack.pop();
+      noteValue('');
+      i++;
+      continue;
+    }
+    if (c === '$' && c2 === '{') {
+      stack.push({ kind: 'code', braces: 0 });
+      notePunct('{');
+      i += 2;
+      continue;
+    }
+    i++;
+  }
+  return count;
+}
+
+/** tests/land.test.js → land.test.spawn-budget.json */
+export function declFileForTest(testFile) {
+  return String(testFile).replace(/\.(js|mjs|cjs)$/i, DECL_SUFFIX);
+}
+
+/** foo.test.spawn-budget.json → foo.test ；对不上返回 null */
+export function stemFromDeclFile(declFile) {
+  const name = String(declFile);
+  if (!name.endsWith(DECL_SUFFIX)) return null;
+  return name.slice(0, -DECL_SUFFIX.length);
+}
+
+/** tests/land.test.js → land.test */
+export function stemFromTestFile(testFile) {
+  return String(testFile).replace(/\.(js|mjs|cjs)$/i, '');
+}
+
+/**
+ * 解析一份声明。JSON 都读不成 → unknown（没查成）；
+ * JSON 合法但字段不对 → red（坏配置，不是「按实际数放行」）。
+ * @returns {{state:'ok'|'red'|'unknown', detail?:string, budget?:number, why?:string, headroom?:boolean}}
+ */
+export function parseBudgetDeclaration(text, file) {
+  const label = file || '(声明)';
+  let data;
+  try {
+    data = JSON.parse(String(text));
+  } catch (e) {
+    return { state: 'unknown', detail: `${label} JSON 解析失败：${String(e.message || e).slice(0, 160)}` };
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { state: 'red', detail: `${label} 声明必须是对象，不能是数组/空` };
+  }
+  if (!Number.isInteger(data.budget) || data.budget < 0) {
+    return { state: 'red', detail: `${label} budget 必须是 ≥0 的整数（不许用实际调用数顶上去）` };
+  }
+  if (typeof data.why !== 'string' || !data.why.trim()) {
+    return { state: 'red', detail: `${label} 必须写 why：这条 CLI/进程边界为什么不能改成进程内调用` };
   }
   return {
     state: 'ok',
-    total,
-    detail: total === SPAWN_BUDGET
-      ? `spawnSync ${total} 处，正好卡在预算上——${BUDGET_NOTE}`
-      : `spawnSync ${total} 处 / 预算 ${SPAWN_BUDGET}（还差 ${SPAWN_BUDGET - total} 到上限）`,
+    budget: data.budget,
+    why: data.why.trim(),
+    headroom: data.headroom === true,
+  };
+}
+
+/**
+ * 扫描 tests/：独立数调用，再读声明。不复用被检查测试自己的计数器。
+ * 读目录失败 / 0 个测试文件 / 声明 JSON 读不成 → scan=unknown。
+ *
+ * @param {string} dir
+ * @param {{readdirSync?:Function, readFileSync?:Function}} [io]
+ * @returns {{scan:'ok'|'unknown', scanDetail?:string, counts:{file:string,count:number}[], declarations:object[]}}
+ */
+export function collectSpawnBudgetInputs(dir, io = {}) {
+  const readdir = io.readdirSync || readdirSync;
+  const readFile = io.readFileSync || readFileSync;
+  let names;
+  try {
+    names = readdir(dir);
+  } catch (e) {
+    return {
+      scan: 'unknown',
+      scanDetail: `读不到测试目录：${String(e.message || e)}`,
+      counts: [],
+      declarations: [],
+    };
+  }
+  if (!Array.isArray(names)) {
+    return { scan: 'unknown', scanDetail: 'readdir 结果不是数组（没查成）', counts: [], declarations: [] };
+  }
+  const testFiles = names.filter((f) => TEST_FILE_RE.test(f)).sort();
+  if (testFiles.length === 0) {
+    return {
+      scan: 'unknown',
+      scanDetail: '一个测试文件都没扫到——没查成，不是「没有 spawn」',
+      counts: [],
+      declarations: [],
+    };
+  }
+  const counts = [];
+  for (const f of testFiles) {
+    let src;
+    try {
+      src = readFile(join(dir, f), 'utf8');
+    } catch (e) {
+      return {
+        scan: 'unknown',
+        scanDetail: `读测试文件 ${f} 失败：${String(e.message || e)}`,
+        counts: [],
+        declarations: [],
+      };
+    }
+    counts.push({ file: f, count: countSpawnCalls(src) });
+  }
+  const declFiles = names.filter((f) => String(f).endsWith(DECL_SUFFIX)).sort();
+  const declarations = [];
+  for (const f of declFiles) {
+    let text;
+    try {
+      text = readFile(join(dir, f), 'utf8');
+    } catch (e) {
+      return {
+        scan: 'unknown',
+        scanDetail: `读声明 ${f} 失败：${String(e.message || e)}`,
+        counts,
+        declarations: [],
+      };
+    }
+    const parsed = parseBudgetDeclaration(text, f);
+    if (parsed.state === 'unknown') {
+      return { scan: 'unknown', scanDetail: parsed.detail, counts, declarations: [] };
+    }
+    declarations.push({
+      declFile: f,
+      key: stemFromDeclFile(f),
+      budget: parsed.state === 'ok' ? parsed.budget : null,
+      why: parsed.why || '',
+      headroom: parsed.headroom === true,
+      parseState: parsed.state,
+      parseDetail: parsed.detail || '',
+    });
+  }
+  return { scan: 'ok', counts, declarations };
+}
+
+function topFiles(counts) {
+  return [...counts]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3)
+    .map((c) => `${c.file}×${c.count}`)
+    .join('、');
+}
+
+const HOWTO = '新增 spawn 写对应 tests/<名>.spawn-budget.json（budget + why），'
+  + '或把调用改成进程内（TIA 第二刀）。不许按实际数量自动放宽，不许改一个公共数字。';
+
+/**
+ * @param {object} input collectSpawnBudgetInputs 的返回，或同形对象
+ * @returns {{state:'ok'|'red'|'unknown', detail:string, actualTotal?:number, declaredTotal?:number, violations?:object[]}}
+ */
+export function classifySpawnBudget(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return {
+      state: 'unknown',
+      detail: '扫描结果不是对象（没查成）。公共总数 API 已删，不要把实际调用数当成预算。',
+    };
+  }
+  if (input.scan === 'unknown') {
+    return { state: 'unknown', detail: input.scanDetail || '没查成' };
+  }
+  if (!Array.isArray(input.counts)) {
+    return { state: 'unknown', detail: 'counts 不是数组（没查成）' };
+  }
+  if (input.counts.length === 0) {
+    return { state: 'unknown', detail: '一个测试文件都没扫到——没查成，不是「没有 spawn」' };
+  }
+  if (!Array.isArray(input.declarations)) {
+    return { state: 'unknown', detail: 'declarations 不是数组（没查成）——缺声明不许拿实际数顶预算' };
+  }
+
+  const violations = [];
+  for (const d of input.declarations) {
+    if (d.parseState && d.parseState !== 'ok') {
+      violations.push({ kind: 'bad-decl', file: d.declFile, detail: d.parseDetail || `${d.declFile} 声明不合法` });
+    }
+  }
+
+  const declByKey = new Map();
+  for (const d of input.declarations) {
+    if (d.parseState && d.parseState !== 'ok') continue;
+    if (d.headroom) continue;
+    if (!d.key) {
+      violations.push({ kind: 'bad-decl', file: d.declFile, detail: `${d.declFile} 文件名对不上 ${DECL_SUFFIX}` });
+      continue;
+    }
+    if (declByKey.has(d.key)) {
+      violations.push({ kind: 'dup', file: d.declFile, detail: `${d.declFile} 与另一份声明重复（同一测试只能有一份）` });
+      continue;
+    }
+    declByKey.set(d.key, d);
+  }
+
+  const countByKey = new Map();
+  for (const c of input.counts) {
+    const key = stemFromTestFile(c.file);
+    countByKey.set(key, c);
+    const n = Number(c.count) || 0;
+    if (n <= 0) continue;
+    const d = declByKey.get(key);
+    if (!d) {
+      violations.push({
+        kind: 'undeclared',
+        file: c.file,
+        count: n,
+        detail: `${c.file} 有 ${n} 处 spawnSync，没有 ${declFileForTest(c.file)}（未声明 spawn 必须红）`,
+      });
+      continue;
+    }
+    if (n > d.budget) {
+      violations.push({
+        kind: 'over',
+        file: c.file,
+        count: n,
+        budget: d.budget,
+        detail: `${c.file} spawnSync ${n} 处，超本文件预算 ${d.budget}（${HOWTO}）`,
+      });
+    }
+  }
+
+  for (const d of input.declarations) {
+    if (d.headroom) continue;
+    if (d.parseState && d.parseState !== 'ok') continue;
+    if (!d.key) continue;
+    if (!countByKey.has(d.key)) {
+      violations.push({
+        kind: 'orphan',
+        file: d.declFile,
+        detail: `声明 ${d.declFile} 找不到对应测试文件（删测试须同时删声明，余量写 headroom:true）`,
+      });
+    }
+  }
+
+  const actualTotal = input.counts.reduce((s, c) => s + (Number(c.count) || 0), 0);
+  const declaredTotal = input.declarations.reduce((s, d) => {
+    if (d.parseState && d.parseState !== 'ok') return s;
+    if (!Number.isInteger(d.budget)) return s;
+    return s + d.budget;
+  }, 0);
+
+  if (violations.length) {
+    const shown = violations.slice(0, 4).map((v) => v.detail).join('；');
+    return {
+      state: 'red',
+      actualTotal,
+      declaredTotal,
+      violations,
+      detail: `测试里 spawnSync ${actualTotal} 处 / 声明合计 ${declaredTotal}。${shown}${violations.length > 4 ? ' …' : ''}。大头：${topFiles(input.counts)}。${HOWTO}`,
+    };
+  }
+
+  const slack = declaredTotal - actualTotal;
+  const targetNote = `第二刀目标 ≤${SECOND_CUT_TARGET}`;
+  return {
+    state: 'ok',
+    actualTotal,
+    declaredTotal,
+    violations: [],
+    detail: slack === 0
+      ? `spawnSync ${actualTotal} 处，正好卡在声明合计上——${targetNote}。${HOWTO}`
+      : `spawnSync ${actualTotal} 处 / 声明合计 ${declaredTotal}（还差 ${slack} 到上限；${targetNote}）。${HOWTO}`,
   };
 }

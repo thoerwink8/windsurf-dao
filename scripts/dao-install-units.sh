@@ -123,6 +123,16 @@ Group=orca
 WorkingDirectory=/srv/projects/windsurf-dao
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/land.mjs /srv/projects/windsurf-dao
 ### dao-land.timer
+### dao-fleet-temporal.service
+User=orca
+Group=orca
+WorkingDirectory=/home/orca
+ExecStart=/usr/local/bin/temporal server start-dev --ip 127.0.0.1 --port 7233 --db-filename /home/orca/.dao/temporal/temporal.db --log-level warn
+### dao-fleet-worker.service
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+ExecStart=/usr/bin/node packages/fleet/src/cli.mjs worker
 ### dao-patrol-failure.service
 User=orca
 WorkingDirectory=/srv/projects/windsurf-dao

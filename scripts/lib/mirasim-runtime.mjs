@@ -5,7 +5,7 @@
 //   ensureWorkspace(repo, branch)             → {path}
 //   startSession({agent, workdir, prompt})    → {sessionKey, taskId}
 //   readSession(sessionKey)                   → {phase, text, toolCalls, error}
-//   listSessions()                            → {ok, sessions}（读不到 sessions=null，不回 []）
+//   listSessions()                            → {ok, sessions}（读不到或条目缺合法 sessionKey → sessions=null，不回 []）
 //   interact(sessionKey, answer)
 //   stopSession(sessionKey)
 // handshake() 不是第五个动词：#1151 探活用的只读握手（开 ws、读 state、发 listSessions、挂断），不发 prompt。
@@ -22,8 +22,10 @@
 //  1. 起会话前先断言契约：state.version 必须等于钉死的版本，且 prompt / snapshot 真正要读的
 //     那几个字段形状对得上。不符 → 抛 MirasimContractError，一帧 prompt 都不发。
 //  2. 判完工不能只信自己这条连接的 snapshot：prompt 之后推送不保证送到发起连接
-//     （§72 实咬：我方只见 queued，服务端其实 2.7 秒就干完了）。要 phase 是 done
+//     （§72 实咬：我方只见 queued，服务端其实 2.7 秒就干完了）。relay/cloud 要 phase 是 done
 //     **且** 账本交叉核对得上；两边不一致 → 判「没查成」，不判成。
+//     #1174 T6：direct/local/native/ACP 流量不经 mirasim relay，账本目录结构上就不存在，
+//     再要交叉核只会把「真干完了」判成 unknown（2026-09-06 真机：grok 回 PONG 后一直等到超时）。
 //  3. snapshot 取不到本身也是「没查成」——服务端对它不认识的会话直接不回帧（实测超时，
 //     不是回一个空 snapshot），这跟「跑完了但没内容」是两件事，不许合成一种。
 //
@@ -422,6 +424,39 @@ export function judgeSnapshot(msg, sessionKey) {
 }
 
 /**
+ * 会话清单整份的可用形状。每个条目必须是对象且带非空 sessionKey。
+ * 非对象 / 缺合法 sessionKey → 整份没查成（sessions:null），不许静默跳过。
+ * 改这段前必须知道：跳过坏条目会把 scanned=0 报成查过没事，连带丢掉该条 workdir，
+ * 下游 stop/GC 会把「没看见」当成「树上没人」（#1336）。
+ */
+export function judgeSessionList(sessions) {
+  if (!Array.isArray(sessions)) {
+    return { ok: false, unscanned: true, sessions: null, why: '会话清单不是数组（没查成）' };
+  }
+  for (let i = 0; i < sessions.length; i++) {
+    const s = sessions[i];
+    if (!s || typeof s !== 'object' || Array.isArray(s)) {
+      return {
+        ok: false,
+        unscanned: true,
+        sessions: null,
+        why: `会话清单第 ${i} 条不是对象（没查成，整轮不扫）`,
+      };
+    }
+    const key = s.sessionKey;
+    if (typeof key !== 'string' || key.trim() === '') {
+      return {
+        ok: false,
+        unscanned: true,
+        sessions: null,
+        why: `会话清单第 ${i} 条缺合法 sessionKey（没查成，整轮不扫）`,
+      };
+    }
+  }
+  return { ok: true, unscanned: false, sessions, why: null };
+}
+
+/**
  * 会话清单里的一条 meta（listSessions 回的）。跨连接一定读得到，是 snapshot 取不到时的兜底。
  * 注意 meta 的 preview 只是**预览**，不是完整正文——用它就得标出来，不许当正文交差。
  */
@@ -555,15 +590,27 @@ export function parseTurnTiming(text) {
 }
 
 /**
+ * direct/local/native 和 ACP 不经 mirasim relay，~/.mirasim/traffic 下没有账本目录。
+ * 对它们再要账本交叉核 = 把「真干完了」判成 unknown（#1174 T6）。
+ * cloud/relay 仍要账本。没给 route/backend 时保持旧行为（fail-closed，当 relay）。
+ */
+export function completionSkipsRelayLedger({ route, backend } = {}) {
+  if (String(backend || '').trim().toLowerCase() === 'acp') return true;
+  const r = String(route || '').trim().toLowerCase();
+  return r === 'local' || r === 'direct' || r === 'native';
+}
+
+/**
  * 判完工。这是本文件的核心判据，规矩只有一条：**不许把「没查成」说成「成」**。
  *  view          —— readSessionView 的结果（phase/text/…）
  *  snapshotMissing —— 服务端没回 snapshot 帧
  *  ledger        —— readLedger 的结果 {readable, rows, why}
  *  journal       —— 可选次级判据 {readable, turns, why}
  *  since         —— 起针时刻（毫秒），只认这之后的账本行
+ *  route/backend —— #1174 T6：direct/local/ACP 跳过 relay 账本交叉核
  * 返回 {status:'done'|'running'|'failed'|'unknown', confirmedBy[], reason}
  */
-export function judgeCompletion({ view, snapshotMissing = false, ledger, journal, since = 0 } = {}) {
+export function judgeCompletion({ view, snapshotMissing = false, ledger, journal, since = 0, route, backend } = {}) {
   if (snapshotMissing) {
     return { status: 'unknown', confirmedBy: [], reason: '取不到 snapshot：服务端没回帧，这一针的状态没查成' };
   }
@@ -611,6 +658,16 @@ export function judgeCompletion({ view, snapshotMissing = false, ledger, journal
       confirmedBy: ['snapshot'],
       reason: `快照报 ${phase}，但会话带着死因：${deathNote}——被打断的一针不算完工`,
       error: deathNote,
+    };
+  }
+
+  // #1174 T6：direct/local/ACP 不经 relay，账本目录结构上就不存在。快照 done 且无死因即成。
+  // cloud/relay 仍走下面的交叉核。没给 route 时不猜，保持旧行为。
+  if (completionSkipsRelayLedger({ route, backend })) {
+    return {
+      status: 'done',
+      confirmedBy: ['snapshot'],
+      reason: `快照 ${phase}（direct/local 不经 relay，不要求账本交叉核）`,
     };
   }
 
@@ -881,6 +938,8 @@ export function createRuntime(opts = {}) {
   const channelAdmit = opts.channelAdmit || defaultChannelAdmit;
   // 撞容量落熔断表的写口，同样可注入（夹具不碰真 ~/.dao）。
   const channelFailed = opts.recordChannelFailure || recordChannelFailure;
+  // startSession 记下的 route，给同一 runtime 上的 waitForCompletion 用。跨进程仍要显式传。
+  const launchRouteBySession = new Map();
   const t = {
     open: opts.openTimeoutMs ?? 8_000,
     accept: opts.acceptTimeoutMs ?? 30_000,
@@ -1015,7 +1074,7 @@ export function createRuntime(opts = {}) {
     }
   }
 
-  async function startSession({ agent, workdir, prompt, model, effort, clientRef, route } = {}) {
+  async function startSession({ agent, workdir, prompt, model, effort, clientRef, route, continueFrom = null } = {}) {
     // promptSent / explicitlyRejected 供 catch 里判「这次失败到底发出去没有」（#1174）。
     let promptSent = false;
     let explicitlyRejected = false;
@@ -1111,6 +1170,10 @@ export function createRuntime(opts = {}) {
           prompt,
           agent,
           workdir,
+          // 续跑（continue）的形态就是**同一帧带上已有 sessionKey**：2026-09-19 回环 ws 实测
+          // （服务端 0.0.310）回 `{type:'accepted', sessionKey: 同一个}`；独立的 `{type:'continue'}`
+          // 帧无回帧、`continueFrom` 字段被忽略——两种都不是它的形态，别再试。
+          ...(continueFrom ? { sessionKey: continueFrom } : {}),
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
           ...(route ? { route: route === 'auto' ? null : route } : {}),
@@ -1143,7 +1206,13 @@ export function createRuntime(opts = {}) {
           }
           throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
         }
-        return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
+        if (route && route !== 'auto') launchRouteBySession.set(verdict.sessionKey, route);
+        // 续跑时服务端必须回**同一个** key：回了别的 key 说明它其实新开了一条会话——那不是续跑，
+        // 上下文没接上，按契约不符 fail-close（宁可报错，也别让上层以为续上了）。
+        if (continueFrom && verdict.sessionKey !== continueFrom) {
+          throw new MirasimContractError(`续跑返回了不同的 sessionKey（请求 ${continueFrom}，得到 ${verdict.sessionKey}）`);
+        }
+        return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt, continued: Boolean(continueFrom) };
       } finally {
         wire.close();
       }
@@ -1161,6 +1230,23 @@ export function createRuntime(opts = {}) {
       error.detail = { ...(error.detail || {}), launchUncertain: promptSent && !explicitlyRejected, clientRef: clientRef || null };
       throw error;
     }
+  }
+
+  /**
+   * 续跑（continue）：对**已有**会话再发一帧 prompt，保住它的上下文（Fusion 的「各自持久上下文」）。
+   * 形态见 startSession 里 continueFrom 处的实测注释。opts 要带 agent/workdir（执行记录里有），
+   * 可选 model/effort/route/clientRef。服务端回不同 key → 按没续上 fail-close。
+   */
+  async function resumeSession(priorKey, prompt, opts = {}) {
+    if (typeof priorKey !== 'string' || !SESSION_KEY_RE.test(priorKey)) {
+      throw new MirasimRejectedError('续跑要给出有效的 sessionKey');
+    }
+    if (typeof prompt !== 'string' || !prompt.trim()) {
+      throw new MirasimRejectedError('续跑要给非空 prompt');
+    }
+    const { agent, workdir, model, effort, route, clientRef } = opts;
+    if (!agent || !workdir) throw new MirasimRejectedError('续跑要同时给 agent / workdir（执行记录里有）');
+    return startSession({ agent, workdir, prompt, model, effort, route, clientRef, continueFrom: priorKey });
   }
 
   // Identity reconciliation only. A matching record is not completion evidence.
@@ -1297,14 +1383,18 @@ export function createRuntime(opts = {}) {
    * 等完工。轮询 snapshot，到终态再做交叉核。
    * 超时不叫失败也不叫成功，叫「没查成」——它俩在盘面上的处置完全不同。
    */
-  async function waitForCompletion(sessionKey, { since = 0, timeoutMs = 600_000, pollMs = 3_000 } = {}) {
+  async function waitForCompletion(sessionKey, { since = 0, timeoutMs = 600_000, pollMs = 3_000, route, backend } = {}) {
     const deadline = now() + timeoutMs;
     let last = null;
     for (;;) {
       const view = await readSession(sessionKey);
       last = view;
       const { ledger, journal } = crossCheck(sessionKey);
-      const verdict = judgeCompletion({ view, snapshotMissing: view.missing, ledger, journal, since });
+      const verdict = judgeCompletion({
+        view, snapshotMissing: view.missing, ledger, journal, since,
+        route: route ?? launchRouteBySession.get(sessionKey) ?? undefined,
+        backend,
+      });
       if (verdict.status !== 'running') {
         if (verdict.status !== 'unknown' || now() >= deadline) return { ...verdict, view };
       }
@@ -1341,7 +1431,11 @@ export function createRuntime(opts = {}) {
         if (!msg || !Array.isArray(msg.sessions)) {
           return { ok: false, missing: true, sessions: null, why: '服务端没回可用的 sessions 帧（没查成）' };
         }
-        if (msg.hasMore === false) return { ok: true, missing: false, sessions: msg.sessions, scope: 'global', complete: true };
+        const judged = judgeSessionList(msg.sessions);
+        if (!judged.ok) {
+          return { ok: false, missing: true, unscanned: true, sessions: null, why: judged.why };
+        }
+        if (msg.hasMore === false) return { ok: true, missing: false, sessions: judged.sessions, scope: 'global', complete: true };
         if (msg.hasMore !== true || now() >= deadline) return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举未证明完整（hasMore 缺失或超时）' };
       }
       return { ok: false, missing: true, partial: true, sessions: null, why: '会话枚举超过上限，不能当完整清单' };
@@ -1386,6 +1480,7 @@ export function createRuntime(opts = {}) {
   return {
     ensureWorkspace,
     startSession,
+    resumeSession,
     resolveStart,
     readSession,
     listSessions,
