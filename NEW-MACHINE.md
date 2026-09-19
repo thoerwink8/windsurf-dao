@@ -588,7 +588,19 @@ node src/cli.mjs signal --repo thoerwink8/windsurf-dao --issue <N> [--generation
 | **可重算** | `~/.dao/execution/`（租约/登记/会话记录）、`~/.mirasim/insights/`、`~/.dao/browser-profile/`、`~/.dao/preflight/`、`node-compile-cache` | 不带；新机跑起来自然重建（历史成功率会从零开始） |
 | **不要带** | `~/.dao/commander/`、`~/.dao/retired-orca-*`、`~/.dao/agent-stall-watch*` | 退役物，拷过去只是占盘 |
 
-重建顺序（每一步都可单独重跑，幂等）：
+重建顺序（每一步都可单独重跑，幂等）。**一条命令的版本**（推荐；含逐项读回验收）：
+
+```bash
+sudo node scripts/bootstrap-server.mjs --dry-run       # 先看它要做什么
+sudo node scripts/bootstrap-server.mjs                 # 装 + 验（读回 is-active / NEXT 是时间 / 启动行）
+sudo node scripts/bootstrap-server.mjs --prune-legacy  # 顺带把旧链路单元停用（stop + disable，不删数据）
+```
+
+它只做**编排面**（本仓单元 + onboard）；Mirasim/key/Clash/ssh 归 ai-gateway-stack。
+清单在 `scripts/bootstrap-server.mjs` 顶部（编排面 ORCHESTRATION / 旧链路 LEGACY_UNITS / 读回 READBACK），
+`tests/bootstrap-server.test.js` 盯着「清单与仓库对得上」——清单漂了会当场红。
+
+手工版（想逐步做时用）：
 
 ```bash
 # ① 本仓接线：全局约定 / skills / memory / pi 扩展（onboard 只修它能修的，其余只报）
@@ -599,7 +611,6 @@ cd /srv/projects/windsurf-dao && node scripts/onboard.mjs
 sudo bash scripts/install-fleet.sh          # dao-fleet-temporal + dao-fleet-worker
 sudo bash scripts/install-dao-sync.sh       # 主树跟 origin/master
 sudo bash scripts/install-land.sh           # 收工推主分支
-sudo bash scripts/install-dao-close-issues.sh
 # …其余按需（ls scripts/install-*.sh 是全集；每个脚本头部写了自己装什么、怎么验）
 
 # ③ 上机钩子的 manifest：单元清单与特权行钉在 scripts/dao-install-units.sh，
