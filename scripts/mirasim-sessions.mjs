@@ -23,6 +23,9 @@ import { fileURLToPath } from 'node:url';
 const PORT = Number(process.env.MIRASIM_PORT || 4316);
 const RUN_DIR = process.env.MIRASIM_RUN_DIR || join(homedir(), '.mirasim', 'run');
 const TIMEOUT_MS = Number(process.env.MIRASIM_LS_TIMEOUT_MS || 30000);
+/** 导出给测试用：**测试不许抄这个数字**——抄了就会跟环境（MIRASIM_LS_TIMEOUT_MS）漂开，
+ *  表现为「本地全绿、CI 随机红」的抖动（T40 实咬）。要断言就 import 它。 */
+export const SESSIONS_TIMEOUT_MS = TIMEOUT_MS;
 
 function bail(why) {
   console.error(`mirasim 会话没查成：${why}`);
