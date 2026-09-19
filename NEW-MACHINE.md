@@ -556,6 +556,9 @@ sudo bash scripts/install-fleet.sh
 与 `dao-fleet-worker`（领任务、建树、起会话、合并、关单；`DAO_FLEET_PROJECTS` 是
 「仓 → 本机 checkout」映射，没映射的仓直接拒）。数据落 `/home/orca/.dao/temporal/`。
 
+并发（T27）：worker 的并发**显式**给（不设 = SDK 默认，等于没定）：环境变量 `DAO_FLEET_CONCURRENCY`，
+默认 `核数 × 2`（会话是 I/O 等待为主）。**上限的真正闸是模型渠道并发**（provider 级），渠道满判 `queued`
+排队等待（60s × 30），不是拒起。压测档位 N=4/8/12，看成功率/时长/内存峰值/渠道 busy 率。
 升版 = 拉代码 + 重启 worker（任务状态在 Temporal 里，重启不丢在途任务）：
 
 ```bash

@@ -128,7 +128,7 @@ describe('retry classification does not create new task cards', () => {
     assert.equal(classifyStepFailure({ code: 'UNKNOWN' }), 'unscanned');
     assert.equal(classifyStepFailure({ code: 'MirasimUnavailableError' }), 'retryable', '回环 ws 连不上是瞬时故障，实测几分钟自愈');
     assert.equal(classifyStepFailure({ code: 'busy', reason: 'lease-held' }), 'retryable', '背压不是失败');
-    assert.equal(classifyStepFailure({ code: 'ActivityFailure', reason: 'channel-full' }), 'retryable');
+    assert.equal(classifyStepFailure({ code: 'ActivityFailure', reason: 'channel-full' }), 'queued', '渠道满是排队不是失败（T27）');
     assert.equal(classifyStepFailure({ code: 'SomethingElse' }), 'unscanned', '认不出的不放行');
     assert.equal(classifyStepFailure({ code: 'WAITING_USER' }), 'blocked', '等人在回答不是传输故障，重试只会再问一次');
     assert.equal(classifyStepFailure({ code: 'AcpRuntimeError', reason: 'ACP session/new timed out' }), 'retryable', 'ACP 启动超时是瞬时故障');
@@ -137,5 +137,8 @@ describe('retry classification does not create new task cards', () => {
     assert.equal(classifyStepFailure({ code: 'SERVICE_UNAVAILABLE', reason: 'gpt-5.6-terra 当前可用容量已满，本次请求未被服务' }), 'capacity');
     assert.equal(classifyStepFailure({ code: 'RATE_LIMITED', reason: 'too many requests' }), 'capacity');
     assert.equal(classifyStepFailure({ code: 'SERVICE_UNAVAILABLE', reason: 'upstream 503' }), 'retryable', '没有容量字样的 503 仍走小退避');
+    // T27：渠道满/维护窗要排队（共享资源），不是失败、也不吃小退避预算。
+    assert.equal(classifyStepFailure({ code: 'busy', reason: 'channel-full' }), 'queued');
+    assert.equal(classifyStepFailure({ code: 'busy', reason: 'maintenance' }), 'queued');
   });
 });

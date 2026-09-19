@@ -16,6 +16,7 @@ export async function fusionTaskWorkflow(input, options = {}) {
   let cancelled = false;
   let transientRetries = 0;
   let capacityWaits = 0;
+  let queuedWaits = 0;
   const scope = new CancellationScope();
   // 活动超时要覆盖 runSession 的最坏路径（首轮 stepTimeout + 宽限 + 收尾余量）。
   // 算术的唯一出处在 limits.mjs；宽限里不许再叠 sleep（复核实咬 P1：叠了就是 2×，
@@ -48,6 +49,12 @@ export async function fusionTaskWorkflow(input, options = {}) {
             await sleep(`${capacityWaitSeconds}s`);
             continue;
           }
+        }
+        // 渠道满/维护窗：**排队等待**（60s × 30 = 30 分钟）——共享资源满了要等，不是拒起、也不吃小退避预算。
+        if (state.failureClass === 'queued') {
+          const queueBudget = Number.isFinite(options.queueWaitAttempts) ? options.queueWaitAttempts : 30;
+          const queueWaitSeconds = Number.isFinite(options.queueWaitSeconds) ? options.queueWaitSeconds : 60;
+          if (queuedWaits < queueBudget) { queuedWaits += 1; await sleep(`${queueWaitSeconds}s`); continue; }
         }
         const transientBudget = state.failureClass === 'pending' ? 10 : 5;
         if ((state.failureClass === 'retryable' || state.failureClass === 'pending') && transientRetries < transientBudget) {

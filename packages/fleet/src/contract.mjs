@@ -93,6 +93,8 @@ export function classifyStepFailure(error) {
   // 它是全队共享的资源条件，要**长退避等待**（分钟级），不该烧完 5 次小退避就 block
   // （2026-09-19 实咬：luna/terra/astra 同时满，g3 的审查因此停摆）。判据先于通用 code 检查。
   if (/capacity|容量已满|at capacity|rate.?limit|too many requests|429/i.test(String(error?.reason || ''))) return 'capacity';
+  // 渠道满 / 维护窗：**排队**，不是失败（T27：一台 VPS 跑多任务时渠道是共享资源，满了该等）。
+  if (/channel-full|maintenance/i.test(String(error?.reason || ''))) return 'queued';
   if (['RATE_LIMITED', 'TRANSPORT_CLOSED', 'SERVICE_UNAVAILABLE', 'DEADLINE_EXCEEDED'].includes(code)) return 'retryable';
   // 执行体自己抛的瞬时故障：回环 ws 连不上、租约/渠道背压、维护窗口。
   // 这些在实测里几分钟内自愈（回环 ws 12 小时红 11 次、每次下一轮自己好），
