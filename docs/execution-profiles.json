@@ -101,6 +101,13 @@
     {
       "id": "opencode-api",
       "provider": "opencode",
+      "lifecycle": {
+        "dimension": "subscription",
+        "declaredUntil": "2026-09-20",
+        "declaredBy": "user",
+        "declaredAt": "2026-09-19",
+        "note": "用户 2026-09-19 拍板：20 号过期（订阅维度；模型维度另记在腿的 lifecycle 上）"
+      },
       "billingUnit": "USD",
       "availability": {
         "status": "unverified",
@@ -113,6 +120,13 @@
     {
       "id": "opencode-go-subscription",
       "provider": "opencode-go",
+      "lifecycle": {
+        "dimension": "subscription",
+        "declaredUntil": "2026-09-20",
+        "declaredBy": "user",
+        "declaredAt": "2026-09-19",
+        "note": "用户 2026-09-19 拍板：20 号过期（订阅维度；模型维度另记在腿的 lifecycle 上）"
+      },
       "billingUnit": "subscription_or_credits",
       "availability": {
         "status": "unverified",
@@ -125,6 +139,13 @@
     {
       "id": "commandcode-subscription",
       "provider": "commandcode",
+      "lifecycle": {
+        "dimension": "subscription",
+        "declaredUntil": "2026-09-20",
+        "declaredBy": "user",
+        "declaredAt": "2026-09-19",
+        "note": "用户 2026-09-19 拍板：20 号过期（订阅维度；模型维度另记在腿的 lifecycle 上）"
+      },
       "billingUnit": "subscription_or_credits",
       "availability": {
         "status": "unverified",
@@ -151,7 +172,14 @@
       "providers": [
         "devin-native",
         "windsurf"
-      ],
+      ],      "lifecycle": {
+        "dimension": "subscription",
+        "declaredUntil": "2026-09-20",
+        "declaredBy": "user",
+        "declaredAt": "2026-09-19",
+        "note": "用户 2026-09-19 拍板：20 号过期（订阅维度；模型维度另记在腿的 lifecycle 上）"
+      },
+
       "billingUnit": "subscription_or_credits",
       "availability": {
         "status": "available",
@@ -764,7 +792,33 @@
         "reason": "account_billing_not_observed"
       },
       "modelSelection": "agent-default"
+    },    {
+      "id": "devin-acp-swe2",
+      "backend": "acp",
+      "agent": "devin",
+      "model": null,
+      "route": "local",
+      "provider": "devin-native",
+      "accountPoolId": "windsurf-devin-subscription",
+      "modelFamily": "cognition",
+      "roles": ["companion", "implementation"],
+      "enabled": false,
+      "defaultForModels": [],
+      "lifecycle": {
+        "dimension": "model",
+        "declaredUntil": null,
+        "declaredBy": "public-doc",
+        "declaredAt": "2026-09-19",
+        "note": "SWE-2 只在 Devin 产品内可选（Cognition 没发独立 API/权重/token 价）——模型维度的过期只能靠探针观测，不能靠公告日期"
+      },
+      "availability": { "status": "unverified", "checkedAt": "2026-09-19T00:00:00.000Z", "evidenceKind": "public-doc", "sourceId": "cognition-blog-swe2", "reason": "ACP 握手不报 model id（与 devin-acp-default 同因），须先做 prompt 资格验证才敢标可用" },
+      "quality": { "status": "unverified", "tier": "unknown", "sourceId": null },
+      "capabilities": { "read": { "status": "declared" }, "resume": { "status": "declared" } },
+      "pricing": { "status": "unknown", "currency": null, "unit": null, "inputPerMillion": null, "outputPerMillion": null, "cacheReadPerMillion": null, "sourceId": null, "checkedAt": null, "reason": "account_billing_not_observed" },
+      "modelSelection": "agent-default",
+      "note": "SWE-2（2026-09-10 发布；Devin Desktop / Devin CLI 是首发两个入口）：medium/high/max 三档 reasoning effort；底座 Kimi K3（2.8T）+ Cognition 自家 RL；FrontierCode 1.1 Main 50.0%（Fable 5.1 50.9%，官方称便宜 64%）、Terminal-Bench 2.1 92.8%（全表第一）、Terminal-Bench 4 27.3%（Fable 5.1 55.8% / GPT-6 Astra 57.9%，这一行明显弱）——接进派工选型前先按 ACP 腿做资格验证"
     },
+
     {
       "id": "opencode-zen-deepseek",
       "backend": "mirasim",
