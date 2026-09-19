@@ -20,7 +20,7 @@ _dao_backup/
 # playwright MCP 的 output dir：页面跳转就会在**仓根**长出它（页面快照 yml + 控制台日志），
 # 不必等到截图。清理钩子 dao-playwright-cleanup.js 只管 %LOCALAPPDATA% 那份，管不到这里。
 # 用户 2026-08-10 拍板（issue #269 ㈢）：这类自动产物永久不进版本库。
-# 会红的闸：tests/hard-gates.tests.js 的 G4 节断言 `git check-ignore` 对它 exit 0。
+# 会红的闸：tests/gitignore.test.js 断言 `git check-ignore` 对它 exit 0。
 .playwright-mcp/
 .dao-targets
 # 主仓的 manual 锁绝不能进仓：settings.local.json 优先级高于随仓 .claude/settings.json，
@@ -36,6 +36,12 @@ __pycache__/
 # 飞书适配器（#801）live 模式的 SDK 依赖（服务器 npm install 产物，测试/CI 不装）
 host/machine/feishu-triage/node_modules/
 
+# node_modules 一律不进 git（根目录 / 子包 / 任何层）。
+# 2026-09-19 实咬：此前只 ignore 了两个具体子路径，**根目录那份没被 ignore**——
+# 它以「未跟踪文件」身份躺在主树里，而主树是两个帅位共用的，谁跑一次 `git add -A`
+# 就会把整棵依赖树卷进提交。闸：tests/gitignore.test.js。
+node_modules/
+
 # 审官草稿（#601）：判定正文进 GitHub review，树里这份只会挡住 orca worktree rm
 # 收窄到根目录；不许靠「删树时按白名单删文件」
 /review-*.txt
@@ -49,4 +55,3 @@ config-sync/**
 # devin 交互形态任务书（dao.mjs 写进工人树，--prompt-file 备用通道；
 # 不进 git——脏树会挡 orca worktree rm，内容是内部指令不该进 PR）
 _prompt.txt
-packages/fleet/node_modules/
