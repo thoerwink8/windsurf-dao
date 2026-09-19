@@ -1,0 +1,6 @@
+[Unit]
+Description=ok sample heal-root
+
+[Timer]
+OnCalendar=*:00/5
+Persistent=true

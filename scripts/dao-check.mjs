@@ -122,6 +122,11 @@
 //    正当做法：代码写文件（`node /tmp/x.mjs`）、正文写文件（`--body-file`）。
 //    单引号无 `$` 不报（红得没道理的闸会被关掉）；node_modules 不扫。检查器自持解析，
 //    不 import 任何 shell/网关解析器。红/绿/空样本各一验判别力；0 份文本 = 没查成。
+// ㊳ 单元已上机 + 活日历不撞点（#1408）：仓内 host/machine/systemd 的契约字段
+//    （OnCalendar / User / ExecStart / Environment / ReadWritePaths）必须与
+//    /etc 那份 fragment 一致；活 heal-root 与活 dao-sync 的 OnCalendar 展开
+//    相交必须为空。读不到 = 没查成，不是「一致」也不是「不撞」。
+//    不比 drop-in 全文（那是 ⑳ 被故意配置钉红的病）。红/绿/空夹具验判别力。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -186,6 +191,11 @@ import {
 import {
   inspectUnitRestartDir, inspectUnitRestartFixtures,
 } from './lib/unit-restart-check.mjs';
+import {
+  inspectUnitDeployFixtures, inspectFragmentDirs, classifyHealSyncOverlap,
+  parseOnCalendar, UNIT_DIR_REL, LIVE_UNIT_DIR, HEAL_ROOT_TIMER, SYNC_TIMER,
+  INSTALL_HINT,
+} from './lib/unit-deploy-check.mjs';
 import {
   inspectInlineScripts, inspectInlineScriptsFixtures, listScanFiles, isSamplePath,
 } from './lib/inline-script-check.mjs';
@@ -2199,6 +2209,8 @@ checkDispatchPolicySamples();
 checkDispatchPolicyLive();
 checkUnitRestartSamples();
 checkUnitRestartLive();
+checkUnitDeploySamples();
+checkUnitDeployLive();
 checkInlineScriptSamples();
 checkInlineScriptLive();
 checkFailedUnitsLive();
@@ -2287,6 +2299,88 @@ function checkUnitRestartLive() {
     return;
   }
   green(`常驻 Restart=always 闸：扫了 ${r.scanned} 个（常驻 ${r.resident}），0 个违规`);
+}
+
+function checkUnitDeploySamples() {
+  const r = inspectUnitDeployFixtures({
+    exists: (rel) => existsSync(join(ROOT, rel)),
+    readdir: (rel) => readdirSync(join(ROOT, rel)),
+    readFile: (rel) => readFileSync(join(ROOT, rel), 'utf8'),
+  });
+  if (!r.ok) {
+    fail(
+      r.unscanned ? '单元上机闸样本没查成' : '单元上机闸样本对不上',
+      '恢复 tests/fixtures/unit-deploy/{red,ok,empty}：红=仓内 OnCalendar 与活单元不同必须拦、绿必须过、空=没查成',
+      r.error || (r.problems || []).join('；'),
+    );
+    return;
+  }
+  green(`单元上机闸样本红/绿/空各 ${r.kinds.red}/${r.kinds.ok}/${r.kinds.empty}（有判别力）`);
+}
+
+function readLiveUnitText(name) {
+  const cat = spawnSync('systemctl', ['cat', name], {
+    encoding: 'utf8', timeout: 8000, windowsHide: true,
+  });
+  if (!cat.error && cat.status === 0 && String(cat.stdout || '').trim()) {
+    return { ok: true, text: String(cat.stdout), via: 'systemctl cat' };
+  }
+  const p = join(LIVE_UNIT_DIR, name);
+  try {
+    return { ok: true, text: readFileSync(p, 'utf8'), via: p };
+  } catch (e) {
+    const why = cat.error ? String(cat.error.message || cat.error) : `systemctl cat exit ${cat.status}`;
+    return { ok: false, error: `${why}；读 ${p}：${String(e && e.message ? e.message : e).slice(0, 120)}` };
+  }
+}
+
+function checkUnitDeployLive() {
+  const repoDir = join(ROOT, UNIT_DIR_REL);
+  if (!existsSync(LIVE_UNIT_DIR)) {
+    skip(`单元上机闸 live：本机没有 ${LIVE_UNIT_DIR}——没查成，不是绿`);
+    return;
+  }
+  if (!existsSync(repoDir)) {
+    fail('单元上机闸 live 没查成', `恢复 ${UNIT_DIR_REL}/；目录不在 = 没查成，不是 0 个违规`, repoDir);
+    return;
+  }
+  const fragment = inspectFragmentDirs({
+    repoDir,
+    liveDir: LIVE_UNIT_DIR,
+    readdir: (d) => readdirSync(d),
+    readFile: (p) => readFileSync(p, 'utf8'),
+  });
+  if (fragment.state === 'unknown') {
+    skip(`单元上机闸 live：${fragment.detail}`);
+    return;
+  }
+
+  const heal = readLiveUnitText(HEAL_ROOT_TIMER);
+  const sync = readLiveUnitText(SYNC_TIMER);
+  const overlap = classifyHealSyncOverlap({
+    healCal: heal.ok ? parseOnCalendar(heal.text) : null,
+    syncCal: sync.ok ? parseOnCalendar(sync.text) : null,
+  });
+
+  if (fragment.state === 'red' || overlap.state === 'red') {
+    fail(
+      fragment.state === 'red'
+        ? '仓内 systemd 单元和机器上的活单元不是同一份'
+        : '活单元 heal-root 与 dao-sync 撞点',
+      `上机：${INSTALL_HINT}（会装 /usr/local/sbin/dao-install-units）。不要改 dao-sync 自己的点位。`,
+      [fragment.state === 'red' ? fragment.detail : '', overlap.state === 'red' ? overlap.detail : ''].filter(Boolean).join('；'),
+    );
+    return;
+  }
+  if (overlap.state === 'unknown') {
+    fail(
+      '活单元撞点没查成',
+      `systemctl cat 或读 ${LIVE_UNIT_DIR} 要能拿到 ${HEAL_ROOT_TIMER} 与 ${SYNC_TIMER} 的 OnCalendar；读不到不是「不撞」`,
+      overlap.detail + (heal.ok ? '' : `；heal：${heal.error}`) + (sync.ok ? '' : `；sync：${sync.error}`),
+    );
+    return;
+  }
+  green(`${fragment.detail}；${overlap.detail}`);
 }
 
 function checkInlineScriptSamples() {

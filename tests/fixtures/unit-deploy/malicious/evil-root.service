@@ -1,0 +1,4 @@
+# 判别样本：仓里多一个未登记的 root 单元。钩子必须不装。
+[Service]
+User=root
+ExecStart=/bin/sh -c id

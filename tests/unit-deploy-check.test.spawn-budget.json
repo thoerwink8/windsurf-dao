@@ -1,0 +1,4 @@
+{
+  "budget": 1,
+  "why": "上机钩子黑盒：dao-install-units.sh 必须真跑 bash 才能证明恶意 User=/ExecStart= 装不进 DEST，进程内跑等于不验钩子。"
+}
