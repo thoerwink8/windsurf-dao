@@ -46,6 +46,7 @@
 | D | ~/.local/share | 原生 Cursor/Devin CLI 版本、会话与凭据根；按产品管理，不整目录镜像 |
 | C | ~/.local/share/devin/credentials.toml | Linux 上 Devin CLI 登录态（`devin auth`）。0600，不进 git。Windows 同物见 `~/AppData/Local/devin` |
 | E | ~/.config/ai-gateway | 归 `ai-gateway-stack`。本仓不写装法、不写值 |
+| E | ~/.reclaude | 归 `ai-gateway-stack`。reclaude（Claude Code 官方 CLI 的代理/隧道客户端）落点：`device.*`（凭据）/`ca.pem`（MITM CA）/`state.json`/`claude.path`（**现役 claude 是哪份**，写绝对路径）。装法与检查见 `deploy/machine-check.mjs` 的 `checkReclaudeEnv`；判例 `docs/observations/2026-09-19-reclaude接入五步与两处退役接线.md`。本仓不写装法 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
 | D | ~/mirasim-worktrees | mirasim 派工树根（#880）。布局 `~/mirasim-worktrees/<仓>/<分支>`。指挥官 #1007 准入两层枚举这里，再对 `~/.mirasim/sessions` 的存活事实数在途工人（不按一层仓目录猜）。运行态，换机不拷 |
 | A | ~/.dao/admission | 派单准入采样（#1007）。指挥官每轮追加 `{at,inFlight,memAvailableMb,loadNorm}` 到 `samples.ndjson`，用相邻样本差推单工人占用。不进 git，换机重生成 |
