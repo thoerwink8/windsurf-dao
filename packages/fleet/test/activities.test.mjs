@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createActivities, parseFindings, parsePlan, parseSingle } from '../src/activities.mjs';
+import { createActivities, parseFindings, parsePlan, parseSingle, commitPrefixFor } from '../src/activities.mjs';
+import { readFileSync } from 'node:fs';
 
 const H = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -187,6 +188,25 @@ describe('activities bind the workflow to real systems', () => {
   it('非瞬时错误原样抛，不伪装成可重试', async () => {
     const { activities } = harness({ runtime: { startSession: async () => { throw new Error('boom'); } } });
     await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), error => error?.type !== 'busy');
+  });
+  it('提交前缀由系统按执行档对齐：模型写错也改成 [grok]（单一真相源=执行档）', async () => {
+    const { activities, calls } = harness({
+      git: async (args) => (args[0] === 'log'
+        ? { status: 0, out: '[codex] docs: x\n\n正文保留\n' }
+        : args[0] === 'rev-parse' ? { status: 0, out: H } : { status: 0, out: '' }),
+      gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"master"}]' } : { ok: true, out: '{}' }),
+    });
+    const artifact = await activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 });
+    assert.equal(artifact.commitPrefix.expected, '[grok]');
+    assert.equal(artifact.commitPrefix.changed, true);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'commit' && rest[1] === '--amend'), true, '前缀不对要 amend');
+  });
+  it('前缀集合与执行目录的 agent 集合同源（防漂移）', () => {
+    const doc = JSON.parse(readFileSync(new URL('../../../docs/execution-profiles.json', import.meta.url), 'utf8'));
+    const agents = [...new Set((doc.profiles || []).filter(p => p.enabled).map(p => p.agent))].sort();
+    assert.ok(agents.length > 0, '执行目录一个执行体都没扫到 = 没查成');
+    for (const agent of agents) assert.equal(commitPrefixFor(agent), `[${agent}]`, `执行体 ${agent} 必须自动有前缀`);
+    assert.equal(commitPrefixFor('bad agent'), null, '不合形状的 agent 不给前缀（不猜）');
   });
   it('接手时停不掉会话 → 不接手，报释放未核实', async () => {
     const { activities, calls } = harness({

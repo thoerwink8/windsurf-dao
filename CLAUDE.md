@@ -7,7 +7,7 @@
 - 改动在 worktree 里做，做完再提交推 master——主树是两个帅位共用的，谁跑一次 `git add -A` 就会把对方的在途改动卷进自己的提交（2026-09-06 咬了两次，第二次连 commit message 都没提被卷走的三个文件）。
 - 改完跑 `node scripts/dao-check.mjs`，绿了才算完，红了当场处理或如实报告。它默认跑全部测试、不出网（不采覆盖率、不裁剪）；`--full` 另外打开要出网的那几项。兜底不靠这一次：`land.mjs` 与 CI 各自还会跑。Issue 写动作只走 `node scripts/issue-gateway.mjs`（#792），不许裸 `gh issue` 写。
 - 出问题优先 revert 到最近一个能用的提交，再另开改动处理——先回到能跑的状态，再慢慢补。
-- commit 标题以宿主标识开头：Claude Code 用 `[cc]`，pi 用 `[pi]`，Codex 用 `[codex]`，Grok 用 `[grok]`。版本号规则按需读 dao-commit skill（`host/skills/dao-commit/SKILL.md`），不常驻注入。
+- commit 标题以**执行档的 agent** 开头（单一真相源 `docs/execution-profiles.json`）：`[cursor]`/`[codex]`/`[grok]`/`[devin]`/`[claude]`/`[pi]`…；fleet 任务由系统在 push 前强制对齐（模型写错也改回来）。旧表按宿主写死（`[cc]`/`[pi]`）已退役。版本号规则按需读 dao-commit skill（`host/skills/dao-commit/SKILL.md`），不常驻注入。
 - 验收/通过记录必须与被测代码同基线：记录「X 修好 / 测验通过」的提交必须包含被测代码本身（#766 教训：通过记录挂在旧基线会误导后人）。
 - 改动影响新机安装时，同一次提交里更新 NEW-MACHINE.md；拿不准就更新——漏更比多更代价大。换机 = `git clone` + `node scripts/onboard.mjs`（幂等，坏了重跑即修）。
 - 派工链上的规矩（draft PR 起步、PR 正文写验收、审官判绿、开新单三问）已回岗——全文在 dispatch skill「编排态工作法」节。
