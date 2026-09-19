@@ -15,6 +15,7 @@
 
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import os from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Client, Connection } from '@temporalio/client';
@@ -215,14 +216,18 @@ async function main() {
       const native = await NativeConnection.connect({ address: ADDRESS });
       try {
         const activities = await makeActivities();
+        // 并发**显式化**（T27）：不设就是 SDK 默认，等于没定。会话是 I/O 等待为主（等模型），
+        // 所以按核数 ×2 起，再按实测（~/.dao/admission 采样）调；上限由**渠道闸**兜底，不靠这里拍。
+        const concurrency = Number(args.concurrency || process.env.DAO_FLEET_CONCURRENCY || 0) || Math.max(4, (os.cpus?.().length || 4) * 2);
         const worker = await Worker.create({
+          maxConcurrentActivityTaskExecutions: concurrency,
           connection: native,
           namespace: NAMESPACE,
           taskQueue: String(args.queue || QUEUE),
           workflowsPath: join(import.meta.dirname, 'workflows.mjs'),
           activities,
         });
-        process.stdout.write(`[fleet] worker 已启动：queue=${args.queue || QUEUE} address=${ADDRESS} projects=${Object.keys(PROJECTS).join(',') || '（无）'}\n`);
+        process.stdout.write(`[fleet] worker 已启动：并发=${concurrency} queue=${args.queue || QUEUE} address=${ADDRESS} projects=${Object.keys(PROJECTS).join(',') || '（无）'}\n`);
         await worker.run();
       } finally {
         await native.close();
