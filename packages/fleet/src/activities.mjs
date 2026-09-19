@@ -91,7 +91,16 @@ const alignCommitPrefix = async (workdir, prefix, gitFn) => {
   return amended?.status === 0 ? { aligned: true, changed: true, from: subject } : { aligned: false, why: String(amended?.err || 'amend failed').slice(0, 120) };
 };
 
-export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = DEFAULT_UNKNOWN_WAIT_MS, unknownWaitRounds = DEFAULT_UNKNOWN_WAIT_ROUNDS, resumeAttempts = 2, sleepFn = sleep, now = () => new Date().toISOString() }) {
+/** T33：lead 自审的默认提示词（在异厂独立审查**之前**跑）。产出与 review 同形，但**不参与判定**——
+ *  只当返工输入：便宜的（命名/边界/漏测/取巧）在这一层捞掉，异厂审查者看到更干净的产物。 */
+const DEFAULT_SELF_REVIEW_PROMPT = ({ task, artifact, checks, plan }) => `你是本任务的主脑（lead），现在做**自审**（在异厂独立审查之前）。只审 ${task.repository} 的 PR #${artifact.pr}，绑定 HEAD ${artifact.head}。工作目录已检出该 HEAD：不要改代码、不要提交、不要推送，也不要跑 gh 或联网——需要的外部事实系统已经给你了。
+你的计划：${String((plan && plan.plan) || '').slice(0, 1200)}
+检查证据（系统取回，不必自己再查）：${JSON.stringify(checks)}
+只输出一个 JSON 对象，不要输出其它文字：
+{"findings":[{"id":"<短横线小写短名>","severity":"P1|P2|P3","type":"security|data|contract|correctness|perf|maintainability|ui","effort":"small|medium|large","file":"<文件>","line":<行号>,"detail":"<现象 + 期望改法>"}]}
+没有任何问题就输出 {"findings":[]}。这一层是**自审**：只报你有把握的（命名/边界/漏测/取巧），不确定的别报成 P1。`;
+
+export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, selfReviewPrompt = DEFAULT_SELF_REVIEW_PROMPT, closeIssue, deploy, pushEnv = {}, unknownWaitMs = DEFAULT_UNKNOWN_WAIT_MS, unknownWaitRounds = DEFAULT_UNKNOWN_WAIT_ROUNDS, resumeAttempts = 2, sleepFn = sleep, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
     const path = projects[repository];
     if (!path) throw fail('UNSUPPORTED_CAPABILITY', `no local checkout mapped for ${repository}`);
@@ -339,8 +348,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       if (!Number.isSafeInteger(number) || number <= 0) throw fail('SERVICE_UNAVAILABLE', 'pr number unresolved');
       return { repository: task.repository, head: finalHead, pr: number, checkpoint: prepared.checkpoint, sessionKey: key, resumed, commitPrefix: { expected: prefix, ...prefixAligned } };
     },
-    async verify(task, artifact, { waitMs } = {}) {
-      const budget = Number.isFinite(waitMs) ? Math.max(0, waitMs) : Math.min(task.limits.stepTimeoutSeconds * 600, 20 * 60 * 1000);
+    async verify(task, artifact, { waitMs } = {}) {      const budget = Number.isFinite(waitMs) ? Math.max(0, waitMs) : Math.min(task.limits.stepTimeoutSeconds * 600, 20 * 60 * 1000);
       const deadline = Date.now() + budget;
       for (;;) {
         const view = await prView(artifact.pr, 'headRefOid,baseRefName,statusCheckRollup', { cwd: artifact.checkpoint });
@@ -352,6 +360,15 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
         if (settled || Date.now() >= deadline) return { scanned: true, head, checks };
         await sleepFn(15000);
       }
+    },
+    /** T33：两级审查的第一级——lead 自审。产出与 review 同形但**不参与判定**：
+     *  解析不出来/会话没跑完都只当「这一层没捞到」，不挡任务（判定权在异厂审查与代码）。 */
+    async selfReview(task, artifact, { checks, plan } = {}) {
+      const { key, status, view } = await runSession(task, artifact.checkpoint, selfReviewPrompt({ task, artifact, checks, plan }), 'lead');
+      if (status !== 'done' || view?.error) return { scanned: false, head: artifact.head, findings: [], sessionKey: key, why: `session ${status}` };
+      const parsed = parseFindings(view?.text);
+      if (!parsed || !Array.isArray(parsed.findings)) return { scanned: false, head: artifact.head, findings: [], sessionKey: key, why: 'unparseable' };
+      return { scanned: true, head: artifact.head, findings: parsed.findings, sessionKey: key };
     },
     async review(task, artifact, { checks }) {
       const executorFamily = profileMeta(task.roles.executor.profile)?.family || null;

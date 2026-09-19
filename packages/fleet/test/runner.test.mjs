@@ -22,6 +22,7 @@ function fixture(overrides = {}) {
     lead: async () => ({ plan: 'Implement the bounded task.' }),
     execute: async () => ({ repository: 'owner/repo', head: A, checkpoint: 'artifact' }),
     verify: async (_task, artifact) => ({ scanned: true, head: artifact.head, checks: [{ name: 'check', status: 'COMPLETED', conclusion: 'SUCCESS' }] }),
+    selfReview: async (_task, artifact) => ({ scanned: true, head: artifact.head, findings: [] }),
     review: async (_task, artifact) => ({ ...pass(), head: artifact.head }),
     integrate: async (_task, artifact) => ({ repository: 'owner/repo', issue: 17, pr: 19, merged: true, sourceHead: artifact.head, mergeCommit: M, baseRefName: 'master' }),
     deploy: async () => ({ checked: true, healthy: true, commit: M }),
@@ -38,7 +39,7 @@ describe('one durable task owns execution, review, rework and closure', () => {
     const result = await runFusionTask(task(), f.io);
     assert.equal(result.state, 'completed');
     assert.equal(result.acceptedHead, A);
-    assert.deepEqual(f.calls, ['prepare', 'lead', 'execute', 'verify', 'review', 'integrate', 'closeIssue']);
+    assert.deepEqual(f.calls, ['prepare', 'lead', 'execute', 'verify', 'selfReview', 'review', 'integrate', 'closeIssue']);
   });
   it('T32：P2/P3（advisory）随 delivery 走到 closeIssue，不被丢掉', async () => {
     let seen = null;
@@ -77,6 +78,24 @@ describe('one durable task owns execution, review, rework and closure', () => {
     const result = await runFusionTask(task(), f.io);
     assert.equal(result.state, 'completed');
     assert.deepEqual(seen.blocking.map((x) => x.id), ['p1', 'small']);
+  });
+  it('T33：lead 自审捞到便宜的问题 → 当场返工，不烧异厂审查', async () => {
+    let selfReviews = 0;
+    let seen = null;
+    const f = fixture({
+      execute: async () => ({ repository: 'owner/repo', head: selfReviews ? B : A, checkpoint: 'artifact', sessionKey: 's1' }),
+      selfReview: async (_task, artifact) => {
+        selfReviews += 1;
+        return { scanned: true, head: artifact.head, findings: selfReviews === 1 ? [{ id: 'naming', severity: 'P2', type: 'maintainability', effort: 'small', detail: 'd' }] : [] };
+      },
+      lead: async (_task, { feedback }) => { if (feedback) seen = feedback; return { plan: 'p' }; },
+    });
+    const result = await runFusionTask(task(), f.io);
+    assert.equal(result.state, 'completed');
+    assert.equal(result.round, 2);
+    assert.deepEqual(seen.blocking.map((x) => x.id), ['naming']);
+    assert.equal(f.calls.filter((n) => n === 'selfReview').length, 2);
+    assert.equal(f.calls.filter((n) => n === 'review').length, 1, '异厂审查只在自审干净后才跑');
   });
   it('keeps rework inside the same task and does not integrate an earlier rejected head', async () => {
     let reviews = 0;
