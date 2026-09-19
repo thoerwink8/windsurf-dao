@@ -63,7 +63,7 @@ import {
   manualMergeApproved,
 } from './land-decision.mjs';
 import {
-  prioritizeReady, resolveAdmissionPolicy, RENAMED_KEY_HINT,
+  prioritizeReady, priorityRankOf, priorityNameOf, resolveAdmissionPolicy, RENAMED_KEY_HINT,
   capNewDispatchSlots,
 } from './admission.mjs';
 import { planTreeReaps, markTreesForMergedPrs } from './ephemeral-reap.mjs';
@@ -1292,7 +1292,7 @@ function collectCandidates(situation) {
         mergePolicy: mergePlan.mergePolicy,
         mergeReason: mergePlan.mergeReason,
         mergePolicySource: mergePlan.mergePolicySource,
-        why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
+        why: `#${n} 已消歧、无在途派工、model|reviewer 标签齐；${priorityNameOf(priorityRankOf(issue))}；merge-policy:${mergePlan.mergePolicy}${mergePlan.mergeReason ? `（${mergePlan.mergeReason}）` : ''}`,
       }, N.dispatch));
       out.push(withNeeds(hub(`已自动派单 #${n}：${issue?.title || ''}（merge-policy:${mergePlan.mergePolicy}）`, 'dispatched', { issue: n }), N.dispatch));
     }
