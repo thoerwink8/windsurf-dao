@@ -168,30 +168,44 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
 
   /** 执行体抛的瞬时故障（租约/渠道背压、维护窗、启动未定）在这一层统一转成带类型的可重试失败，
    *  否则过界后类型丢失、被判定层按 unscanned 停手等人（g4 实咬）。 */
-  const runSession = async (task, workdir, prompt, role) => {
+  const runSession = async (task, workdir, prompt, role, options = {}) => {
     try {
-      return await runSessionOnce(task, workdir, prompt, role);
+      return await runSessionOnce(task, workdir, prompt, role, options);
     } catch (error) {
       throw asTransientFailure(error, role) || error;
     }
   };
-  const runSessionOnce = async (task, workdir, prompt, role) => {
+  const runSessionOnce = async (task, workdir, prompt, role, options = {}) => {
     const profile = task.roles[role];
+    const meta = profileMeta(profile.profile);
     let started;
+    let resumed = false;
+    // T7：**返工续跑同一会话**——上下文还热，修起来便宜（Devin「REJECT 当场修」就是这个）。
+    // 续不上（后端不支持 / 回了别的 key）就回落新会话，不硬来（T19 同口径）。
+    if (options.resumeFrom) {
+      const prior = await runtime.resumeSession(options.resumeFrom, prompt, { agent: meta?.agent, workdir, model: profile.profile })
+        .catch(error => ({ sessionKey: null, why: String(error?.message || error) }));
+      if (prior?.sessionKey === options.resumeFrom) {
+        started = { sessionKey: options.resumeFrom };
+        resumed = true;
+      }
+    }
     // 起会话前先收本树：上一次失败的启动/未终态的会话会让租约闸判「已有活跃或未知会话」而拒绝，
     // 于是可重试的瞬时故障变成死循环（真跑实咬两轮）。同一任务同一棵树里同时只有一个会话，先收是安全的。
     // 先按**租约**收树（确定性）：等待中/未定的占用者在这里被显式停掉——名单会抖，租约不会。
-    const freed = await releaseStuckTree(workdir).catch(error => ({ ok: false, why: String(error?.message || error) }));
-    if (freed?.ok !== true) throw fail("SERVICE_UNAVAILABLE", `worktree lease release unverified: ${String(freed?.why || "").slice(0, 120)}`);
-    await reapWorkdirSessions(workdir).catch(() => {});
-    try {
-      started = await runtime.startSession({ profileId: profile.profile, agent: profileMeta(profile.profile)?.agent, model: profile.profile, workdir, prompt, taskId: task.id, title: `${task.id} ${role}` });
-    } catch (error) {
-      // 启动失败会在树里留下「未定」会话记录，重试会被租约闸判「已有活跃或未知会话」而拒绝——
-      // 于是瞬时故障变成死循环（真跑实咬：回环 ws 抖动 → 重试 → 撞租约闸）。
-      // 先收掉本树自己的会话再抛；收不干净也要抛，让上层按可重试处理。
+    if (!started) {
+      const freed = await releaseStuckTree(workdir).catch(error => ({ ok: false, why: String(error?.message || error) }));
+      if (freed?.ok !== true) throw fail("SERVICE_UNAVAILABLE", `worktree lease release unverified: ${String(freed?.why || "").slice(0, 120)}`);
       await reapWorkdirSessions(workdir).catch(() => {});
-      throw error;
+      try {
+        started = await runtime.startSession({ profileId: profile.profile, agent: meta?.agent, model: profile.profile, workdir, prompt, taskId: task.id, title: `${task.id} ${role}` });
+      } catch (error) {
+        // 启动失败会在树里留下「未定」会话记录，重试会被租约闸判「已有活跃或未知会话」而拒绝——
+        // 于是瞬时故障变成死循环（真跑实咬：回环 ws 抖动 → 重试 → 撞租约闸）。
+        // 先收掉本树自己的会话再抛；收不干净也要抛，让上层按可重试处理。
+        await reapWorkdirSessions(workdir).catch(() => {});
+        throw error;
+      }
     }
     const key = started?.sessionKey || started?.key;
     if (!key) throw fail('SERVICE_UNAVAILABLE', 'session launch returned no key');
@@ -231,14 +245,13 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     // 而且重开还要再赌一次容量（用户拍板：Mirasim 支持 continue；ACP 走 session/load）。
     // 续不上（后端不支持 / 服务端回了别的 key）就原样交上层按可重试处理，不硬来。
     for (let attempt = 0; attempt < resumeAttempts && (settled?.status === 'done' || settled?.status === 'failed') && TRANSIENT_UPSTREAM.test(String(view?.error || '')); attempt += 1) {
-      const meta = profileMeta(profile.profile);
-      const resumed = await runtime.resumeSession(key, `继续：上一轮被上游中断（${String(view?.error || '').slice(0, 120)}）。接着原任务做完，不要从头重来。`, { agent: meta?.agent, workdir, model: profile.profile }).catch(error => ({ sessionKey: null, why: String(error?.message || error) }));
-      if (resumed?.sessionKey !== key) break;
+      const resumedUpstream = await runtime.resumeSession(key, `继续：上一轮被上游中断（${String(view?.error || '').slice(0, 120)}）。接着原任务做完，不要从头重来。`, { agent: meta?.agent, workdir, model: profile.profile }).catch(error => ({ sessionKey: null, why: String(error?.message || error) }));
+      if (resumedUpstream?.sessionKey !== key) break;
       settled = await runtime.waitForCompletion(key, { timeoutMs: task.limits.stepTimeoutSeconds * 1000 });
       view = await runtime.readSession(key);
       if (isWaiting(settled, view)) throw fail('WAITING_USER', `${role} session is waiting for an answer`, { sessionKey: key, role });
     }
-    return { key, status: settled?.status, view };
+    return { key, status: settled?.status, view, resumed };
   };
   /** 执行档的 agent 与 family 都从执行目录取：agent 决定起哪个执行体，family 决定跨厂判定。
    *  两者都不采信契约里的声明——契约能写「我是另一家」，执行目录不能。 */
@@ -284,9 +297,11 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     async execute(task, { plan, prepared, feedback, round }) {
       let key = null;
       let status = 'done';
+      let resumed = false;
       const prefix = commitPrefixFor(profileMeta(task.roles.executor.profile)?.agent);
       try {
-        ({ key, status } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round, issue: await issueBrief(task), prefix }), "executor"));
+        // T7：返工轮带上一轮的 sessionKey → 续跑同一会话（上下文还热，修起来便宜）。
+        ({ key, status, resumed } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round, issue: await issueBrief(task), prefix }), "executor", { resumeFrom: feedback?.sessionKey }));
       } catch (error) {
         if (error?.type !== 'WAITING_USER') throw error;
         // 边界画在「交卷」上：工人在等人回答权限，但它可能**已经交卷**（提交就是交卷）。
@@ -322,7 +337,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
         number = Number(String(created.out).trim().split('/').pop());
       }
       if (!Number.isSafeInteger(number) || number <= 0) throw fail('SERVICE_UNAVAILABLE', 'pr number unresolved');
-      return { repository: task.repository, head: finalHead, pr: number, checkpoint: prepared.checkpoint, sessionKey: key, commitPrefix: { expected: prefix, ...prefixAligned } };
+      return { repository: task.repository, head: finalHead, pr: number, checkpoint: prepared.checkpoint, sessionKey: key, resumed, commitPrefix: { expected: prefix, ...prefixAligned } };
     },
     async verify(task, artifact, { waitMs } = {}) {
       const budget = Number.isFinite(waitMs) ? Math.max(0, waitMs) : Math.min(task.limits.stepTimeoutSeconds * 600, 20 * 60 * 1000);

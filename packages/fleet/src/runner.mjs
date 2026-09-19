@@ -69,7 +69,7 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
       if (checked.state === 'blocked') {
         // 检查失败不进审查：把失败本身当返工输入，别烧一轮审查预算去审一份过不了闸的东西。
         state.round += 1;
-        state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: [{ id: 'checks-failed', severity: 'P1', detail: `契约检查未通过：${JSON.stringify(state.checks.checks)}` }] };
+        state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: [{ id: 'checks-failed', severity: 'P1', detail: `契约检查未通过：${JSON.stringify(state.checks.checks)}` }], sessionKey: state.artifact.sessionKey };
         delete state.plan; delete state.artifact; delete state.checks; delete state.review;
         report();
         continue;
@@ -90,7 +90,8 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
         report();
         break;
       }
-      state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: reviewed.blocking };
+      // T7：把上一轮执行会话的 key 带进反馈——返工要**续跑同一会话**（上下文还热），不是重开。
+      state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: reviewed.blocking, sessionKey: state.artifact.sessionKey };
       delete state.plan;
       delete state.artifact;
       delete state.checks;

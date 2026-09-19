@@ -92,6 +92,30 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 }), /targets develop/);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'gh' && rest[1] === 'create'), false);
   });
+  it('T7：返工带 sessionKey → 续跑同一会话，不重开', async () => {
+    const resumed = [];
+    const { activities, calls } = harness({
+      gh: async (args) => (args[0] === 'pr' && args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"master"}]' } : { ok: true, out: '{}' }),
+      runtime: {
+        resumeSession: async (key) => { resumed.push(key); return { sessionKey: key }; },
+        waitForCompletion: async () => ({ status: 'done' }),
+        readSession: async () => text('done'),
+      },
+    });
+    const artifact = await activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 1, feedback: { head: B, sessionKey: 'session-7' } });
+    assert.equal(artifact.resumed, true);
+    assert.deepEqual(resumed, ['session-7']);
+    assert.equal(calls.some(([kind]) => kind === 'startSession'), false, '返工不许重开会话');
+  });
+  it('T7：续不上（后端不支持）→ 回落新会话，不硬来', async () => {
+    const { activities, calls } = harness({
+      gh: async (args) => (args[0] === 'pr' && args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"master"}]' } : { ok: true, out: '{}' }),
+      runtime: { resumeSession: async () => { throw new Error('resume unsupported'); } },
+    });
+    const artifact = await activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 1, feedback: { head: B, sessionKey: 'session-7' } });
+    assert.equal(artifact.resumed, false);
+    assert.equal(calls.some(([kind]) => kind === 'startSession'), true, '续不上要回落新会话');
+  });
   it('execute opens a draft PR only when none exists, and fails loudly when the number is unresolvable', async () => {
     const created = harness({ gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[]' } : args[1] === 'create' ? { ok: true, out: 'https://github.com/owner/repo/pull/23' } : { ok: true, out: '{}' }) });
     const artifact = await created.activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 });
