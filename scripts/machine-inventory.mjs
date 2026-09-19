@@ -15,21 +15,55 @@
 // 本清单只管**编排面这台机器**要有的 OS / Node / 执行体 / 工具 / sudoers / 凭据落点。
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const HOME = process.env.DAO_INVENTORY_HOME || homedir();
 const run = (cmd, argv) => spawnSync(cmd, argv, { encoding: 'utf8', windowsHide: true });
 const firstLine = text => String(text || '').trim().split('\n')[0]?.slice(0, 60) || '';
 
+/** 解析可执行文件：PATH + `~/.local/bin` + 几个已知的 off-PATH 落点。
+ *  为什么要额外找：ACP 腿（cursor-agent/devin/claude）与 uv 工具（ddgs）**不在 PATH** 上，
+ *  靠 ~/.local/bin 的 shim + versions 目录；只查 PATH 会把「装了」报成「没查成」（实咬）。 */
+const KNOWN_BIN_DIRS = ['.local/bin', '.grok/bin', '.local/share/uv/tools/ddgs/bin', 'bin'];
+const resolveBin = cmd => {
+  // 不用 shell（`bash -lc` 在 Windows 上会返回 POSIX 路径，spawn 直接 ENOENT；登录 shell 还会重置 PATH）。
+  const exts = process.platform === 'win32' ? ['.cmd', '.exe', '.bat', ''] : [''];
+  const dirs = [...String(process.env.PATH || '').split(delimiter), ...KNOWN_BIN_DIRS.map(rel => join(HOME, rel))];
+  for (const dir of dirs) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const candidate = join(dir, cmd + ext);
+      try { if (statSync(candidate).isFile()) return candidate; } catch { /* 这个落点没有，继续 */ }
+    }
+  }
+  return null;
+};
+
 /** 探测小工具：能跑就回 { found, detail }；跑不动回 { found:false, unscanned:true }。 */
 const probeCommand = (cmd, args = ['--version']) => () => {
-  const r = run(cmd, args);
+  const bin = resolveBin(cmd);
+  if (!bin) return { found: false, why: `PATH 与已知落点都没有 ${cmd}` };
+  const r = run(bin, args);
   if (r.error) return { found: false, unscanned: true, why: `探测失败：${r.error.code || r.error.message}` };
   if (r.status !== 0) return { found: false, why: `退出码 ${r.status}：${firstLine(r.stderr) || firstLine(r.stdout)}` };
-  return { found: true, detail: firstLine(r.stdout || r.stderr) || '（无版本输出）' };
+  const offPath = bin !== cmd;
+  return { found: true, detail: `${firstLine(r.stdout || r.stderr) || '（无版本输出）'}${offPath ? `（${bin}，不在 PATH）` : ''}` };
+};
+
+/** /etc/sudoers.d 下的规则：**读不到 ≠ 没有**——非 root 身份 existsSync 会因目录 750 返回 false，
+ *  那是「没查成」，报成红就是假红（本仓被「没查成当红/当绿」咬过很多次）。 */
+const probeSudoers = name => () => {
+  const p = `/etc/sudoers.d/${name}`;
+  try {
+    statSync(p); // existsSync 在 EACCES 上只回 false，分不出「没有」和「看不见」——用 statSync
+    return { found: true, detail: p };
+  } catch (e) {
+    if (e.code === 'ENOENT') return { found: false, why: `不在 ${p}` };
+    return { found: false, unscanned: true, why: `读不了 ${p}（${e.code || e.message}）——用 root 跑才能判` };
+  }
 };
 
 const probeFile = rel => () => {
@@ -83,8 +117,8 @@ export const INVENTORY = [
   { id: 'tool:lark-cli', group: '工具', why: '飞书 CLI（问答卡/通知走它）', how: 'ai-gateway-stack', probe: probeFile('.local/share/lark-cli') },
 
   // ── 接线与凭据落点（内容不进 git）──
-  { id: 'sudoers:dao-sync', group: '接线', why: 'dao-sync 重启飞书机器人那一条最小 sudo 规则', how: 'scripts/install-dao-sync.sh', probe: () => existsSync('/etc/sudoers.d/dao-sync') ? { found: true, detail: '/etc/sudoers.d/dao-sync' } : { found: false, why: '不在 /etc/sudoers.d/dao-sync' } },
-  { id: 'sudoers:mirasim-ws-probe', group: '接线', why: '健康探针的最小 sudo 规则', how: 'scripts/install-mirasim-ws-probe.sh', probe: () => existsSync('/etc/sudoers.d/mirasim-ws-probe') ? { found: true, detail: '/etc/sudoers.d/mirasim-ws-probe' } : { found: false, why: '不在 /etc/sudoers.d/mirasim-ws-probe' } },
+  { id: 'sudoers:dao-sync', group: '接线', why: 'dao-sync 重启飞书机器人那一条最小 sudo 规则', how: 'scripts/install-dao-sync.sh', probe: probeSudoers('dao-sync') },
+  { id: 'sudoers:mirasim-ws-probe', group: '接线', why: '健康探针的最小 sudo 规则', how: 'scripts/install-mirasim-ws-probe.sh', probe: probeSudoers('mirasim-ws-probe') },
   { id: 'creds:dao-apps', group: '凭据', why: 'GitHub App 凭据（C 类，手动带）', how: 'NEW-MACHINE §4b', probe: probeDirEntries('.dao/apps') },
   { id: 'creds:mirasim-keys', group: '凭据', why: 'Mirasim 账户 key（C 类）', how: 'ai-gateway-stack', probe: probeDirEntries('.mirasim/keys') },
   { id: 'env:ai-gateway', group: '凭据', why: 'claude 链的凭据/代理环境文件', how: 'ai-gateway-stack', probe: probeFile('.config/ai-gateway/claude.env') },
