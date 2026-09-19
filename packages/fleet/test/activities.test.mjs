@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createActivities, parseFindings, parsePlan, parseSingle } from '../src/activities.mjs';
+import { createActivities, parseFindings, parsePlan, parseSingle, commitPrefixFor } from '../src/activities.mjs';
+import { readFileSync } from 'node:fs';
 
 const H = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -28,7 +29,7 @@ function harness(overrides = {}) {
     stopSession: async (key) => { calls.push(['stopSession', key]); return { ok: true }; },
     ...overrides.runtime,
   };
-  const gh = async (args) => { calls.push(['gh', ...args]); return overrides.gh ? overrides.gh(args) : { ok: true, out: '{}' }; };
+  const gh = async (args, { role } = {}) => { calls.push(['gh', ...args, role]); return overrides.gh ? overrides.gh(args) : { ok: true, out: '{}' }; };
   const git = async (args, { cwd } = {}) => { calls.push(['git', ...args, cwd]); return overrides.git ? overrides.git(args, cwd) : { status: 0, out: H }; };
   const activities = createActivities({
     runtime, gh, git,
@@ -187,6 +188,35 @@ describe('activities bind the workflow to real systems', () => {
   it('非瞬时错误原样抛，不伪装成可重试', async () => {
     const { activities } = harness({ runtime: { startSession: async () => { throw new Error('boom'); } } });
     await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), error => error?.type !== 'busy');
+  });
+  it('提交前缀由系统按执行档对齐：模型写错也改成 [grok]（单一真相源=执行档）', async () => {
+    const { activities, calls } = harness({
+      git: async (args) => (args[0] === 'log'
+        ? { status: 0, out: '[codex] docs: x\n\n正文保留\n' }
+        : args[0] === 'rev-parse' ? { status: 0, out: H } : { status: 0, out: '' }),
+      gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"master"}]' } : { ok: true, out: '{}' }),
+    });
+    const artifact = await activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 });
+    assert.equal(artifact.commitPrefix.expected, '[grok]');
+    assert.equal(artifact.commitPrefix.changed, true);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'commit' && rest[1] === '--amend'), true, '前缀不对要 amend');
+  });
+  it('前缀集合与执行目录的 agent 集合同源（防漂移）', () => {
+    const doc = JSON.parse(readFileSync(new URL('../../../docs/execution-profiles.json', import.meta.url), 'utf8'));
+    const agents = [...new Set((doc.profiles || []).filter(p => p.enabled).map(p => p.agent))].sort();
+    assert.ok(agents.length > 0, '执行目录一个执行体都没扫到 = 没查成');
+    for (const agent of agents) assert.equal(commitPrefixFor(agent), `[${agent}]`, `执行体 ${agent} 必须自动有前缀`);
+    assert.equal(commitPrefixFor('bad agent'), null, '不合形状的 agent 不给前缀（不猜）');
+  });
+  it('integrate 的每个 gh 调用都带角色（没角色的会被网关拒，g4 实咬）', async () => {
+    const { activities, calls } = harness({ gh: async (args) => {
+      if (args[1] === 'view') return { ok: true, out: JSON.stringify({ state: 'OPEN', number: 19, headRefOid: H, baseRefName: 'master' }) };
+      return { ok: true, out: '' };
+    } });
+    await activities.integrate(task, { pr: 19, head: H, checkpoint: '/trees/b' }).catch(() => {});
+    const ghCalls = calls.filter(([kind]) => kind === 'gh');
+    assert.ok(ghCalls.length > 0, '一次 gh 调用都没记到 = 没查成');
+    assert.equal(ghCalls.every(call => typeof call[call.length - 1] === 'string' && call[call.length - 1].length > 0), true, 'gh 调用必须带 role');
   });
   it('接手时停不掉会话 → 不接手，报释放未核实', async () => {
     const { activities, calls } = harness({

@@ -11,8 +11,7 @@ const fail = (code, message, ...details) => ApplicationFailure.nonRetryable(mess
 /** 执行体抛的瞬时故障要**带着类型**过 Temporal 边界：普通 Error 过界后 type 变成 'Error'、
 //  reason 丢掉，判定层只能按 unscanned 停手等人（g4 实咬：`session is waiting for user` 本该
 //  可重试，却停成 unscanned）。已经是 ApplicationFailure 的原样放行。 */
-const TRANSIENT_REASONS = new Set(['lease-held', 'channel-full', 'maintenance', 'launch-uncertain']);
-const asTransientFailure = (error, role) => {
+const TRANSIENT_REASONS = new Set(['lease-held', 'channel-full', 'maintenance', 'launch-uncertain']);const asTransientFailure = (error, role) => {
   if (!error || typeof error.type === 'string') return null; // 已是 ApplicationFailure：分类信息在
   const reason = error.reason || error.detail?.reason || null;
   const code = error.code || null;
@@ -70,6 +69,27 @@ export const parsePlan = text => parseSingle(text, value => typeof value.plan ==
 /** 上游瞬时中断（容量/限流/断流/超时）：这些**续跑**比重开划算——上下文还在（用户拍板：
  *  Mirasim 支持 continue；形态与实测见 scripts/lib/mirasim-runtime.mjs 的 resumeSession）。 */
 const TRANSIENT_UPSTREAM = /503|capacity|rate.?limit|429|service unavailable|timed?\s*out|超时|容量|stream closed|ECONNRESET|EPIPE/i;
+
+/** 提交前缀**由执行档的 agent 推出来**（单一真相源 = docs/execution-profiles.json）：
+ *  cursor→[cursor]、codex→[codex]、grok→[grok]、devin→[devin]…。旧表按宿主写死（[cc]/[pi]），
+ *  会随执行体换代而失真（用户 2026-09-19 拍板「用逻辑做」）。 */
+export const commitPrefixFor = agent => (typeof agent === 'string' && /^[a-z][a-z0-9-]*$/.test(agent) ? `[${agent}]` : null);
+
+/** 把 HEAD 的提交主题对齐到 `<前缀> <主题>`：只改信息、不动内容，正文原样保留。
+ *  系统在 push 前做这件事——模型写错/没写都不算数（g4 的 composer 工人写成 [codex] 就是这么漏的）。 */
+const alignCommitPrefix = async (workdir, prefix, gitFn) => {
+  if (!prefix) return { aligned: false, why: 'no-prefix' };
+  if (typeof gitFn !== 'function') return { aligned: false, why: 'no-git' };
+  const full = String((await gitFn(['log', '-1', '--format=%B'], { cwd: workdir }))?.out || '');
+  const subject = full.split('\n')[0].trim();
+  if (!subject) return { aligned: false, why: 'no-subject' };
+  if (subject.startsWith(prefix)) return { aligned: true, changed: false };
+  const rest = subject.replace(/^\[[a-z0-9-]+\]\s*/i, '');
+  const lines = full.replace(/\n+$/, '').split('\n');
+  lines[0] = `${prefix} ${rest}`;
+  const amended = await gitFn(['commit', '--amend', '-F', '-'], { cwd: workdir, input: `${lines.join('\n')}\n` });
+  return amended?.status === 0 ? { aligned: true, changed: true, from: subject } : { aligned: false, why: String(amended?.err || 'amend failed').slice(0, 120) };
+};
 
 export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = DEFAULT_UNKNOWN_WAIT_MS, unknownWaitRounds = DEFAULT_UNKNOWN_WAIT_ROUNDS, resumeAttempts = 2, sleepFn = sleep, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
@@ -226,8 +246,9 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     async execute(task, { plan, prepared, feedback, round }) {
       let key = null;
       let status = 'done';
+      const prefix = commitPrefixFor(profileMeta(task.roles.executor.profile)?.agent);
       try {
-        ({ key, status } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round, issue: await issueBrief(task) }), "executor"));
+        ({ key, status } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round, issue: await issueBrief(task), prefix }), "executor"));
       } catch (error) {
         if (error?.type !== 'WAITING_USER') throw error;
         // 边界画在「交卷」上：工人在等人回答权限，但它可能**已经交卷**（提交就是交卷）。
@@ -246,6 +267,10 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       const head = await headOf(prepared.checkpoint);
       const expectedNew = feedback?.head || prepared.head;
       if (head === expectedNew) throw fail('UNSUPPORTED_CAPABILITY', 'executor produced no new commit');
+      // 提交前缀由系统按执行档对齐（单一真相源 = 执行档的 agent）：模型写错/没写都不算数。
+      // amend 只改信息、不动内容；改了就要重读 HEAD（SHA 变了）。
+      const prefixAligned = await alignCommitPrefix(prepared.checkpoint, prefix, git).catch(error => ({ aligned: false, why: String(error?.message || error).slice(0, 120) }));
+      const finalHead = prefixAligned?.changed ? await headOf(prepared.checkpoint) : head;
       const pushed = await git(['push', '-u', 'origin', `HEAD:refs/heads/${prepared.branch}`], { cwd: prepared.checkpoint, env: typeof pushEnv === 'function' ? pushEnv() : pushEnv });
       if (!gitOk(pushed)) throw fail('SERVICE_UNAVAILABLE', `push failed: ${String(pushed?.err || '').slice(0, 200)}`);
       const listed = await runGh(['pr', 'list', '--head', prepared.branch, '--state', 'open', '--json', 'number,baseRefName', '--limit', '5'], { cwd: prepared.checkpoint, role: 'worker' });
@@ -259,7 +284,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
         number = Number(String(created.out).trim().split('/').pop());
       }
       if (!Number.isSafeInteger(number) || number <= 0) throw fail('SERVICE_UNAVAILABLE', 'pr number unresolved');
-      return { repository: task.repository, head, pr: number, checkpoint: prepared.checkpoint, sessionKey: key };
+      return { repository: task.repository, head: finalHead, pr: number, checkpoint: prepared.checkpoint, sessionKey: key, commitPrefix: { expected: prefix, ...prefixAligned } };
     },
     async verify(task, artifact, { waitMs } = {}) {
       const budget = Number.isFinite(waitMs) ? Math.max(0, waitMs) : Math.min(task.limits.stepTimeoutSeconds * 600, 20 * 60 * 1000);
@@ -312,7 +337,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       if (String(before?.state || '').toUpperCase() !== 'OPEN') throw fail('UNSUPPORTED_CAPABILITY', `pr state ${before?.state}`);
       if (String(before?.headRefOid || '') !== artifact.head) throw fail('UNSUPPORTED_CAPABILITY', 'pr head moved since review');
       if (String(before?.baseRefName || '') !== task.contract.targetBranch) throw fail('UNSUPPORTED_CAPABILITY', 'pr target branch mismatch');
-      await runGh(['pr', 'ready', String(artifact.pr)], { cwd: artifact.checkpoint });
+      await runGh(['pr', 'ready', String(artifact.pr)], { cwd: artifact.checkpoint, role: 'marshal' });
       const merged = await gh(['pr', 'merge', String(artifact.pr), '--squash', '--match-head-commit', artifact.head], { cwd: artifact.checkpoint, role: 'marshal' });
       if (!merged?.ok) throw fail('SERVICE_UNAVAILABLE', `merge failed: ${String(merged?.error || '').slice(0, 200)}`);
       const view = await prView(artifact.pr, 'state,mergeCommit,headRefOid,baseRefName,number', { cwd: artifact.checkpoint });
