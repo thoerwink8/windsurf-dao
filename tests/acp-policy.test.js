@@ -163,6 +163,7 @@ test('worktree execute scopes literal path arguments to the tree', async t => {
     fs.symlinkSync(outside, path.join(cwd, 'leak'));
     assert.equal(scope('cat leak'), null, '树内 symlink 指向树外要拒');
     assert.equal(scope('cat leak/secret'), null, 'symlink 下的路径也要拒');
+    assert.equal(scope('grep -fleak x'), null, '短选项紧贴 bare 名（symlink）也要拒（复验相邻缝）');
   }
   assert.equal(scope('cat /etc/passwd && git status'), null, 'one out-of-tree segment refuses the whole chain');
   // 值在树内的紧贴写法照常放行。

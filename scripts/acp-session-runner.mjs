@@ -243,9 +243,17 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
         return resolvesInside(word.slice(word.indexOf('=') + 1));
       }
       if (word.startsWith('-') && word.length > 1) {
+        // 短选项簇可能把值紧贴在字母后，两种附着都要查：
+        //  · 路径型（`-f/etc/passwd`、`-ivnf/etc/passwd`）：找首个 `/` 或 `..`，从那里取候选；
+        //  · bare 名型（`-fleak`）：簇里没有 `/` 时，逐个后缀当文件名判——树内 symlink 指向树外
+        //    的 `-fleak` 也要拒（复核实咬的相邻缝）。
         const option = word.split(/\s/, 1)[0].slice(1);
         for (let j = 1; j < option.length; j += 1) {
           if (option[j] === '/' || option.startsWith('..', j)) return resolvesInside(option.slice(j));
+        }
+        for (let j = 1; j < option.length; j += 1) {
+          const tail = option.slice(j);
+          if (/^[\w.-]+$/.test(tail) && !resolvesInside(tail)) return false;
         }
         return true;
       }
