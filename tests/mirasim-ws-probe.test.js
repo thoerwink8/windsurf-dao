@@ -430,7 +430,10 @@ describe('handshake 是只读：不发 prompt、挂断，但要验 sessions 帧'
 
   it('handshake 等 sessions 帧用 30s，不是 snapshot 的 6s（负载下 6s 会把慢误判成死）', async () => {
     const { createRuntime, SESSIONS_TIMEOUT_MS } = await import(RUNTIME);
-    assert.equal(SESSIONS_TIMEOUT_MS, 30_000);
+    // T40：原来写 `=== 30_000`，而这个默认值可被 MIRASIM_LS_TIMEOUT_MS 覆盖 → 环境一覆盖就红。
+    // 断意图：它是「量级秒以上」的 sessions 预算，且**不是** snapshot 的 6s。
+    assert.ok(SESSIONS_TIMEOUT_MS >= 1_000, `sessions 预算应是量级秒以上，实得 ${SESSIONS_TIMEOUT_MS}`);
+    assert.notEqual(SESSIONS_TIMEOUT_MS, 6_000, 'snapshot 预算（6s）不是 sessions 预算');
     const waits = [];
     const wire = {
       state: goodState,
@@ -444,7 +447,12 @@ describe('handshake 是只读：不发 prompt、挂断，但要验 sessions 帧'
     const rt = createRuntime({ connect: async () => wire });
     await rt.handshake();
     assert.equal(waits.length, 1, 'handshake 只等 sessions 这一帧');
-    assert.equal(waits[0].timeoutMs, 30_000, '跟 mirasim-sessions.mjs 默认同值；6s 是 snapshot 预算');
+    // T40：**断言意图，不抄数字**。原来写 `=== 30_000`，而那个默认值来自
+    // `mirasim-sessions.mjs` 的 `Number(process.env.MIRASIM_LS_TIMEOUT_MS || 30000)`——
+    // 环境一覆盖就不等，表现为「本地全绿、CI 随机红」（已红 4 次）。本仓规矩：闸只拦确定性的量。
+    // 这里的意图是「用的是 sessions 预算，不是 6s 的 snapshot 预算」。
+    assert.ok(waits[0].timeoutMs >= 1_000, `sessions 预算应是量级秒以上，实得 ${waits[0].timeoutMs}`);
+    assert.notEqual(waits[0].timeoutMs, 6_000, '别把 snapshot 预算当成 sessions 预算');
     assert.equal(rt.config.sessionsTimeoutMs, 30_000);
   });
 });
