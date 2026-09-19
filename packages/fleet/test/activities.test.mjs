@@ -92,6 +92,16 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 }), /targets develop/);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'gh' && rest[1] === 'create'), false);
   });
+  it('T33：selfReview 产出与 review 同形，但不参与判定（解析不了只当没捞到）', async () => {
+    const ok = harness({ runtime: { readSession: async () => text('{"findings":[{"id":"naming","severity":"P2","type":"maintainability","effort":"small","detail":"d"}]}') } });
+    const r = await ok.activities.selfReview(task, { checkpoint: '/trees/b', branch: 'b', head: H }, { checks: [], plan: { plan: 'p' } });
+    assert.equal(r.scanned, true);
+    assert.equal(r.findings.length, 1);
+    const bad = harness({ runtime: { readSession: async () => text('no json here') } });
+    const r2 = await bad.activities.selfReview(task, { checkpoint: '/trees/b', branch: 'b', head: H }, { checks: [], plan: { plan: 'p' } });
+    assert.equal(r2.scanned, false);
+    assert.deepEqual(r2.findings, []);
+  });
   it('T7：返工带 sessionKey → 续跑同一会话，不重开', async () => {
     const resumed = [];
     const { activities, calls } = harness({

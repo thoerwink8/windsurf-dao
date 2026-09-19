@@ -2,7 +2,7 @@ import { normalizeTask, judgeReview, judgeChecks, judgeDelivery, classifyStepFai
 import { splitFindings } from './triage.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
-const phases = { prepare: 'preparing', lead: 'planning', execute: 'executing', verify: 'verifying', review: 'reviewing', integrate: 'integrating', deploy: 'deploying', closeIssue: 'closing' };
+const phases = { prepare: 'preparing', lead: 'planning', execute: 'executing', verify: 'verifying', selfReview: 'self-reviewing', review: 'reviewing', integrate: 'integrating', deploy: 'deploying', closeIssue: 'closing' };
 const copy = value => JSON.parse(JSON.stringify(value));
 
 export async function runFusionTask(input, io, { previous, cancelled = () => false, onState = () => {} } = {}) {
@@ -71,7 +71,21 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
         // 检查失败不进审查：把失败本身当返工输入，别烧一轮审查预算去审一份过不了闸的东西。
         state.round += 1;
         state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: [{ id: 'checks-failed', severity: 'P1', detail: `契约检查未通过：${JSON.stringify(state.checks.checks)}` }], sessionKey: state.artifact.sessionKey };
-        delete state.plan; delete state.artifact; delete state.checks; delete state.review;
+        delete state.plan; delete state.artifact; delete state.checks; delete state.review; delete state.selfReview;
+        report();
+        continue;
+      }
+      // T33 两级审查的第一级：lead 自审（上下文还热、便宜）先捞掉便宜的，异厂审查者看到更干净的产物。
+      // 它**不参与判定**：只把判为「当场修」的当返工输入；其余照旧走异厂审查。
+      if (!state.selfReview) {
+        state.selfReview = await step('selfReview', state.artifact, { checks: state.checks, plan: state.plan });
+        report();
+      }
+      const { rework: selfRework } = splitFindings({ findings: state.selfReview?.findings || [], resumable: !!state.artifact.sessionKey });
+      if (selfRework.length) {
+        state.round += 1;
+        state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: selfRework, sessionKey: state.artifact.sessionKey };
+        delete state.plan; delete state.artifact; delete state.checks; delete state.review; delete state.selfReview;
         report();
         continue;
       }
@@ -99,6 +113,7 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
       delete state.artifact;
       delete state.checks;
       delete state.review;
+      delete state.selfReview;
       report();
     }
     if (judgeReview(task, state.acceptedHead, state.review).state !== 'passed' || judgeChecks(task, state.acceptedHead, state.checks).state !== 'passed') {
