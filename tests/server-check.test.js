@@ -1115,7 +1115,21 @@ test('⑪ 读账不重跑（2026-09-20，替代 #984 的 60s 嵌套预算）；o
 
 test('⑪ 三态：账落后本树 HEAD → unknown（不是绿）；同 HEAD code≠0 → red；同 HEAD code 0 → ok；没账/没 HEAD → unknown', () => {
   const H = 'a'.repeat(40);
-  const rec = (o) => ({ head: H, code: 0, ms: 91000, red: 0, green: 275, skip: 18, ts: '2026-09-20T00:31:00.000Z', ...o });
+  const rec = (o) => ({ root: '/srv/x', head: H, code: 0, ms: 91000, red: 0, green: 275, skip: 18, ts: '2026-09-20T00:31:00.000Z', ...o });
+
+  // 残缺/伪造账（同 HEAD）不许变绿也不许变红——只能没样本（审官 #1542 P1）。
+  for (const broken of [
+    { head: H, code: 0 },
+    rec({ code: '0' }),
+    rec({ red: -1 }),
+    rec({ ms: undefined }),
+    rec({ ts: 'yesterday' }),
+    rec({ head: H.slice(0, 7) }),
+  ]) {
+    const r = classifyRepoSelfCheck({ probed: true, head: H, record: broken });
+    assert.equal(r.state, 'unknown', JSON.stringify(broken));
+    assert.match(r.detail, /不完整/);
+  }
 
   const behind = classifyRepoSelfCheck({ probed: true, head: H, record: rec({ head: 'b'.repeat(40) }) });
   assert.equal(behind.state, 'unknown');

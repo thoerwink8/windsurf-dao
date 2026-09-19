@@ -34,17 +34,33 @@ export function writeSelfCheckRecord(record, { home = homedir() } = {}) {
   }
 }
 
-/** 三态读：文件不在 → probed:false（没样本）；JSON 坏 → probed:false；否则 record。 */
+/**
+ * 账的 schema（写方约定，读方独立复核——残缺/伪造的账不许变成绿或红，只能是「没样本」）。
+ * 返回问题清单；空数组 = 合格。
+ */
+export function recordProblems(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return ['不是对象'];
+  const bad = [];
+  if (!/^[0-9a-f]{40}$/.test(String(record.head ?? ''))) bad.push('head 不是 40 位 sha');
+  if (!Number.isInteger(record.code) || record.code < 0) bad.push('code 不是非负整数');
+  if (!Number.isFinite(record.ms) || record.ms < 0) bad.push('ms 不是非负数');
+  for (const k of ['red', 'green', 'skip']) {
+    if (!Number.isInteger(record[k]) || record[k] < 0) bad.push(`${k} 不是非负整数`);
+  }
+  if (typeof record.ts !== 'string' || !Number.isFinite(Date.parse(record.ts))) bad.push('ts 不是可解析时间');
+  if (typeof record.root !== 'string' || !record.root) bad.push('root 缺失');
+  return bad;
+}
+
+/** 三态读：文件不在 → probed:false（没样本）；JSON 坏 / schema 不合 → probed:false；否则 record。 */
 export function readSelfCheckRecord(root, { home = homedir() } = {}) {
   const path = ledgerPathFor(root, home);
   if (!existsSync(path)) return { probed: false, path, reason: `账不存在（${path}）——这棵树上 dao-check 还没跑过` };
-  try {
-    const record = JSON.parse(readFileSync(path, 'utf8'));
-    if (!record || typeof record !== 'object' || typeof record.head !== 'string') {
-      return { probed: false, path, reason: '账里没有 head 字段——不是 dao-check 写的格式' };
-    }
-    return { probed: true, path, record };
-  } catch (e) {
+  let record;
+  try { record = JSON.parse(readFileSync(path, 'utf8')); } catch (e) {
     return { probed: false, path, reason: `账读不了：${e.message}` };
   }
+  const problems = recordProblems(record);
+  if (problems.length) return { probed: false, path, reason: `账不是 dao-check 写的完整格式（${problems.join('；')}）——当没样本` };
+  return { probed: true, path, record };
 }

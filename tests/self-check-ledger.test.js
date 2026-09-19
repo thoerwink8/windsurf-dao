@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ledgerPathFor, readSelfCheckRecord, writeSelfCheckRecord } from '../scripts/lib/self-check-ledger.mjs';
+import { ledgerPathFor, readSelfCheckRecord, recordProblems, writeSelfCheckRecord } from '../scripts/lib/self-check-ledger.mjs';
 
 test('self-check-ledger', async (t) => {
   const home = mkdtempSync(join(tmpdir(), 'scl-home-'));
@@ -44,6 +44,28 @@ test('self-check-ledger', async (t) => {
     const r = readSelfCheckRecord(root, { home });
     assert.equal(r.probed, false);
     assert.match(r.reason, /head/);
+  });
+
+  await t.test('残缺账 {head, code:0}（审官 #1542 P1 样本）→ probed:false，点名缺的字段', () => {
+    writeFileSync(ledgerPathFor(root, home), JSON.stringify({ head: 'e'.repeat(40), code: 0 }));
+    const r = readSelfCheckRecord(root, { home });
+    assert.equal(r.probed, false);
+    assert.match(r.reason, /ms 不是非负数/);
+    assert.match(r.reason, /red 不是非负整数/);
+    assert.match(r.reason, /ts 不是可解析时间/);
+  });
+
+  await t.test('recordProblems：合格账 0 条；每个字段坏一次各点名一次', () => {
+    const good = { root: '/x', head: 'f'.repeat(40), code: 0, ms: 10, red: 0, green: 5, skip: 1, ts: '2026-09-20T00:00:00Z' };
+    assert.deepEqual(recordProblems(good), []);
+    assert.deepEqual(recordProblems({ ...good, head: 'abc' }), ['head 不是 40 位 sha']);
+    assert.deepEqual(recordProblems({ ...good, code: '1' }), ['code 不是非负整数']);
+    assert.deepEqual(recordProblems({ ...good, ms: -1 }), ['ms 不是非负数']);
+    assert.deepEqual(recordProblems({ ...good, skip: 1.5 }), ['skip 不是非负整数']);
+    assert.deepEqual(recordProblems({ ...good, ts: 'nope' }), ['ts 不是可解析时间']);
+    assert.deepEqual(recordProblems({ ...good, root: '' }), ['root 缺失']);
+    assert.deepEqual(recordProblems(null), ['不是对象']);
+    assert.deepEqual(recordProblems([good]), ['不是对象']);
   });
 
   await t.test('账是坏 JSON → probed:false', () => {

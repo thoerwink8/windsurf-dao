@@ -19,8 +19,8 @@
 //   node scripts/server-check.mjs --self-test     故意造违规样本，验探测器真能拦（不碰真环境）
 
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { homedir, userInfo } from 'node:os';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, delimiter as PATH_DELIMITER, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LLM_MODEL as BOT_LLM_MODEL } from './feishu-triage.mjs';
@@ -29,7 +29,7 @@ import { classifyLandTimer, LAND_TIMER } from './lib/land-automation.mjs';
 import { classifyReconcile, parseUsageNdjson } from './lib/model-reconcile.mjs';
 import { classifyGhEventBridge } from './lib/gh-events.mjs';
 import { combineNextElapse, hasNextElapse } from './lib/timer-armed.mjs';
-import { readSelfCheckRecord } from './lib/self-check-ledger.mjs';
+import { ledgerPathFor, readSelfCheckRecord, recordProblems } from './lib/self-check-ledger.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -118,6 +118,9 @@ function checkLandAutomation() {
 export function classifyRepoSelfCheck({ probed = false, reason = '', record = null, head = '' } = {}) {
   if (!head) return { state: UNKNOWN, detail: `读不到本树 HEAD：${reason || ''}` };
   if (!probed) return { state: UNKNOWN, detail: `自检账没读到：${reason || ''}——服务器上由 server-sync 的 self-check-if-changed 写；本机手跑一次 node scripts/dao-check.mjs 也会写` };
+  // 读端已按 schema 复核过；这里再守一层——残缺/伪造的账只能是「没样本」，不许变绿或红。
+  const problems = recordProblems(record);
+  if (problems.length) return { state: UNKNOWN, detail: `自检账不完整（${problems.join('；')}）——当没样本` };
   const rHead = String(record.head || '');
   const when = String(record.ts || '?').replace('T', ' ').slice(0, 19);
   if (rHead !== head) {
@@ -1556,12 +1559,25 @@ function selfTest() {
 
   // ⑪（读账版）：账上 head 落后本树必须 unknown（不是绿）；账上 code≠0 必须红；没账必须 unknown。
   const H = 'a'.repeat(40);
-  const behind = classifyRepoSelfCheck({ probed: true, head: H, record: { head: 'b'.repeat(40), code: 0, ts: '2026-09-20T00:00:00Z' } });
+  const full = (o) => ({ root: '/x', head: H, code: 0, ms: 91000, red: 0, green: 1, skip: 0, ts: '2026-09-20T00:00:00Z', ...o });
+  const behind = classifyRepoSelfCheck({ probed: true, head: H, record: full({ head: 'b'.repeat(40) }) });
   if (behind.state !== UNKNOWN) failures.push(`自检账落后本树 HEAD 应判 unknown，实际 ${behind.state}`);
-  const redLedger = classifyRepoSelfCheck({ probed: true, head: H, record: { head: H, code: 1, red: 3, ts: '2026-09-20T00:00:00Z' } });
+  const redLedger = classifyRepoSelfCheck({ probed: true, head: H, record: full({ code: 1, red: 3 }) });
   if (redLedger.state !== RED || redLedger.count !== 3) failures.push(`账上红 3 项应判 red/3，实际 ${redLedger.state}/${redLedger.count}`);
   if (classifyRepoSelfCheck({ probed: false, reason: 'ENOENT', head: H }).state !== UNKNOWN) failures.push('没账应判 unknown');
-  if (classifyRepoSelfCheck({ probed: true, head: H, record: { head: H, code: 0, ts: '2026-09-20T00:00:00Z' } }).state !== OK) failures.push('账上同 HEAD 且 code 0 应判 ok');
+  if (classifyRepoSelfCheck({ probed: true, head: H, record: full() }).state !== OK) failures.push('账上同 HEAD 且 code 0 应判 ok');
+  // 故意伪造一份残缺账 {head, code:0}（同 HEAD）：读端与判端都必须当没样本，不许变绿。
+  const forged = classifyRepoSelfCheck({ probed: true, head: H, record: { head: H, code: 0 } });
+  if (forged.state !== UNKNOWN) failures.push(`残缺账 {head,code} 应判 unknown（不许假绿），实际 ${forged.state}`);
+  {
+    const home = mkdtempSync(join(tmpdir(), 'sc-selftest-'));
+    try {
+      mkdirSync(join(home, '.dao', 'dao-check'), { recursive: true });
+      writeFileSync(ledgerPathFor(REPO_ROOT, home), JSON.stringify({ head: H, code: 0 }));
+      const r = readSelfCheckRecord(REPO_ROOT, { home });
+      if (r.probed !== false || !/不完整|完整格式/.test(r.reason || '')) failures.push(`读端对残缺账应 probed:false 并点名缺项，实际 ${JSON.stringify(r).slice(0, 160)}`);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  }
 
   // ㉕：故意造「窗口内有一条 non-cc-client」必须红；空日志/日志读不到必须 unknown，不许当 0 条。
   const nowIso = new Date();
