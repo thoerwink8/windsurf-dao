@@ -41,11 +41,16 @@ export function writeSelfCheckRecord(record, { home = homedir() } = {}) {
 export function recordProblems(record) {
   if (!record || typeof record !== 'object' || Array.isArray(record)) return ['不是对象'];
   const bad = [];
-  if (!/^[0-9a-f]{40}$/.test(String(record.head ?? ''))) bad.push('head 不是 40 位 sha');
+  // 类型先于形状：数组/对象经 String() 会被洗成看似合法的串（审官 #1542 第二轮样本 {"head":["<sha>"]}）。
+  if (typeof record.head !== 'string' || !/^[0-9a-f]{40}$/.test(record.head)) bad.push('head 不是 40 位 sha 字符串');
   if (!Number.isInteger(record.code) || record.code < 0) bad.push('code 不是非负整数');
   if (!Number.isFinite(record.ms) || record.ms < 0) bad.push('ms 不是非负数');
   for (const k of ['red', 'green', 'skip']) {
     if (!Number.isInteger(record[k]) || record[k] < 0) bad.push(`${k} 不是非负整数`);
+  }
+  // 写方不变量：dao-check 只在 failures.length === 0 时退出 0——code 与 red 必须同为零或同非零。
+  if (Number.isInteger(record.code) && Number.isInteger(record.red) && (record.code === 0) !== (record.red === 0)) {
+    bad.push(`code 与 red 不一致（code=${record.code}, red=${record.red}）`);
   }
   if (typeof record.ts !== 'string' || !Number.isFinite(Date.parse(record.ts))) bad.push('ts 不是可解析时间');
   if (typeof record.root !== 'string' || !record.root) bad.push('root 缺失');

@@ -1569,6 +1569,11 @@ function selfTest() {
   // 故意伪造一份残缺账 {head, code:0}（同 HEAD）：读端与判端都必须当没样本，不许变绿。
   const forged = classifyRepoSelfCheck({ probed: true, head: H, record: { head: H, code: 0 } });
   if (forged.state !== UNKNOWN) failures.push(`残缺账 {head,code} 应判 unknown（不许假绿），实际 ${forged.state}`);
+  // 审官 #1542 第二轮两份伪造账：数组 head（String() 会洗白）、code 0 却带红项——都只能是没样本。
+  const arrHead = classifyRepoSelfCheck({ probed: true, head: H, record: full({ head: [H] }) });
+  if (arrHead.state !== UNKNOWN) failures.push(`数组 head 的伪造账应判 unknown，实际 ${arrHead.state}`);
+  const codeRed = classifyRepoSelfCheck({ probed: true, head: H, record: full({ code: 0, red: 3 }) });
+  if (codeRed.state !== UNKNOWN) failures.push(`code 0 带红项的伪造账应判 unknown，实际 ${codeRed.state}`);
   {
     const home = mkdtempSync(join(tmpdir(), 'sc-selftest-'));
     try {

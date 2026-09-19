@@ -1125,6 +1125,9 @@ test('⑪ 三态：账落后本树 HEAD → unknown（不是绿）；同 HEAD co
     rec({ ms: undefined }),
     rec({ ts: 'yesterday' }),
     rec({ head: H.slice(0, 7) }),
+    rec({ head: [H] }),            // 审官第二轮样本 1：数组 head 经 String() 洗白
+    rec({ code: 0, red: 3 }),      // 审官第二轮样本 2：code 0 却带红项
+    rec({ code: 1, red: 0 }),
   ]) {
     const r = classifyRepoSelfCheck({ probed: true, head: H, record: broken });
     assert.equal(r.state, 'unknown', JSON.stringify(broken));

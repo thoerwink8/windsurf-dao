@@ -58,7 +58,12 @@ test('self-check-ledger', async (t) => {
   await t.test('recordProblems：合格账 0 条；每个字段坏一次各点名一次', () => {
     const good = { root: '/x', head: 'f'.repeat(40), code: 0, ms: 10, red: 0, green: 5, skip: 1, ts: '2026-09-20T00:00:00Z' };
     assert.deepEqual(recordProblems(good), []);
-    assert.deepEqual(recordProblems({ ...good, head: 'abc' }), ['head 不是 40 位 sha']);
+    assert.deepEqual(recordProblems({ ...good, head: 'abc' }), ['head 不是 40 位 sha 字符串']);
+    // 审官 #1542 第二轮两份伪造账：数组 head 经 String() 洗白；code 0 却带红项。
+    assert.deepEqual(recordProblems({ ...good, head: ['f'.repeat(40)] }), ['head 不是 40 位 sha 字符串']);
+    assert.deepEqual(recordProblems({ ...good, code: 0, red: 3 }), ['code 与 red 不一致（code=0, red=3）']);
+    assert.deepEqual(recordProblems({ ...good, code: 1, red: 0 }), ['code 与 red 不一致（code=1, red=0）']);
+    assert.deepEqual(recordProblems({ ...good, code: 1, red: 3 }), []);
     assert.deepEqual(recordProblems({ ...good, code: '1' }), ['code 不是非负整数']);
     assert.deepEqual(recordProblems({ ...good, ms: -1 }), ['ms 不是非负数']);
     assert.deepEqual(recordProblems({ ...good, skip: 1.5 }), ['skip 不是非负整数']);
