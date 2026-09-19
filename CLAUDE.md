@@ -5,6 +5,7 @@
 ## 怎么工作
 
 - 改动在 worktree 里做，做完再提交推 master——主树是两个帅位共用的，谁跑一次 `git add -A` 就会把对方的在途改动卷进自己的提交（2026-09-06 咬了两次，第二次连 commit message 都没提被卷走的三个文件）。
+- **开工前先 `git pull`**（用户 2026-09-19 立为公约）：别的机器也在跑同一个仓，很容易忘。机械版已落：fleet 的 `prepare` **起树前先 `git fetch origin --prune`**，fetch 失败按可重试处理（宁可不做，不做过期的）；`repo-hygiene` 会把「落后 N 笔」判红（周期闸，兜底）。
 - 改完跑 `node scripts/dao-check.mjs`，绿了才算完，红了当场处理或如实报告。它默认跑全部测试、不出网（不采覆盖率、不裁剪）；`--full` 另外打开要出网的那几项。兜底不靠这一次：`land.mjs` 与 CI 各自还会跑。Issue 写动作只走 `node scripts/issue-gateway.mjs`（#792），不许裸 `gh issue` 写。
 - 出问题优先 revert 到最近一个能用的提交，再另开改动处理——先回到能跑的状态，再慢慢补。
 - commit 标题以**执行档的 agent** 开头（单一真相源 `docs/execution-profiles.json`）：`[cursor]`/`[codex]`/`[grok]`/`[devin]`/`[claude]`/`[pi]`…；fleet 任务由系统在 push 前强制对齐（模型写错也改回来）。旧表按宿主写死（`[cc]`/`[pi]`）已退役。版本号规则按需读 dao-commit skill（`host/skills/dao-commit/SKILL.md`），不常驻注入。

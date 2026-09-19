@@ -76,7 +76,13 @@ describe('activities bind the workflow to real systems', () => {
     assert.equal(prepared.repository, 'owner/repo');
     assert.equal(prepared.head, H);
     assert.equal(prepared.branch, 'dao/issue-17-g1');
-    assert.deepEqual(calls[0], ['ensureWorkspace', '/repos/repo', 'dao/issue-17-g1']);
+    // 公约「开工前先 pull」的机械版：起树前必须先 fetch（否则从过期的 origin/master 起树）。
+    assert.deepEqual(calls[0], ['git', 'fetch', 'origin', '--prune', '/repos/repo']);
+    assert.deepEqual(calls.find(([kind]) => kind === 'ensureWorkspace'), ['ensureWorkspace', '/repos/repo', 'dao/issue-17-g1']);
+  });
+  it('prepare：fetch 失败 → 可重试失败，不拿过期基线开工', async () => {
+    const { activities } = harness({ git: async (args) => (args[0] === 'fetch' ? { status: 1, err: 'could not resolve host' } : { status: 0, out: H }) });
+    await assert.rejects(activities.prepare(task), /prepare fetch failed/);
   });
   it('refuses repositories without a mapped checkout instead of guessing a path', async () => {
     const { activities } = harness();
