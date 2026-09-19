@@ -465,3 +465,51 @@ describe('activities bind the workflow to real systems', () => {
     assert.equal(worse.verified, false);
   });
 });
+
+describe('T37 ④ pre-flight：子仓不符合约定脊柱就拒派', () => {
+  const CHILD = 'thoerwink8/ai-gateway-stack';
+  const childTask = { ...task, repository: CHILD };
+  const deps = { projects: { 'owner/repo': '/repos/repo', [CHILD]: '/repos/ags' } };
+  const OK_DOC = '# 子仓\n\n<!-- dao-conventions: v1 sha256:abcdef12 -->\n';
+  const OK_PIN = JSON.stringify({ version: 1, sha256: 'abcdef12' });
+  const ghMap = (map) => async (args) => {
+    const path = args[args.length - 1];
+    if (!(path in map)) return { ok: false, error: 'gh: Not Found (HTTP 404)' };
+    return { ok: true, out: map[path] };
+  };
+
+  it('子仓接好了 → 正常起树', async () => {
+    const { activities } = harness({
+      deps,
+      gh: ghMap({
+        [`repos/${CHILD}/contents/AGENTS.md`]: OK_DOC,
+        [`repos/${CHILD}/contents/.dao/conventions.json`]: OK_PIN,
+      }),
+    });
+    const prepared = await activities.prepare(childTask);
+    assert.equal(prepared.repository, CHILD);
+  });
+
+  it('子仓没接（两个 doc 都 404）→ 拒派，且不 fetch、不起树', async () => {
+    const { activities, calls } = harness({ deps, gh: ghMap({}) });
+    await assert.rejects(activities.prepare(childTask), /子仓不符合约定脊柱/);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'fetch'), false);
+  });
+
+  it('子仓的块被改旧（戳与 pin 不符）→ 拒派', async () => {
+    const { activities } = harness({
+      deps,
+      gh: ghMap({
+        [`repos/${CHILD}/contents/AGENTS.md`]: '# 子仓\n\n<!-- dao-conventions: v1 sha256:00000000 -->\n',
+        [`repos/${CHILD}/contents/.dao/conventions.json`]: OK_PIN,
+      }),
+    });
+    await assert.rejects(activities.prepare(childTask), /stale-stamp/);
+  });
+
+  it('没声明的仓 → 本项不适用，一个 api 调用都不发', async () => {
+    const { activities, calls } = harness({ deps });
+    await activities.prepare(task);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'gh' && rest[0] === 'api'), false);
+  });
+});

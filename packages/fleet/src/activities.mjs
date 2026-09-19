@@ -1,7 +1,9 @@
 import { ApplicationFailure } from '@temporalio/activity';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { judgeRepo } from '../../../scripts/lib/conformance.mjs';
 import { DEFAULT_UNKNOWN_WAIT_MS, DEFAULT_UNKNOWN_WAIT_ROUNDS } from './limits.mjs';
 import { escalationFileName } from './escalation.mjs';
 
@@ -117,6 +119,54 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     catch { throw fail('SERVICE_UNAVAILABLE', 'gh returned non-JSON'); }
   };
   const gitOk = result => Boolean(result) && result.status === 0;
+
+  // T37 ④：跨仓派工前先看子仓符不符合约定脊柱——**不符合就不起树**。
+  // 这是本仓唯一能单方面执行的硬手段（子仓不同 CI、不同 owner，本仓管不了它们的合并）。
+  // 口径与 scripts/conformance.mjs 一致：确定不存在 = 拒；取不到 = 也拒（宁可不做，不做过期的）。
+  const childReposPath = fileURLToPath(new URL('../../../host/machine/child-repos.json', import.meta.url));
+  const loadChildRepos = () => {
+    try {
+      const doc = JSON.parse(readFileSync(childReposPath, 'utf8'));
+      return Array.isArray(doc && doc.repos) ? doc.repos : [];
+    } catch (error) {
+      throw fail('SERVICE_UNAVAILABLE', `child-repos.json 读不成（${childReposPath}）：${String(error?.message || error).slice(0, 120)}`);
+    }
+  };
+  const truthVersion = () => {
+    try {
+      const p = fileURLToPath(new URL('../../../host/conventions/conventions.json', import.meta.url));
+      return JSON.parse(readFileSync(p, 'utf8')).version;
+    } catch { return undefined; }
+  };
+  const ghRaw = async (path, { cwd, role = 'marshal' } = {}) => {
+    const r = await gh(['api', '-H', 'Accept: application/vnd.github.raw', path], { cwd, role });
+    if (r && r.ok) return { ok: true, text: String(r.out || '') };
+    const err = String((r && r.error) || '');
+    return { ok: false, notFound: /HTTP 404|Not Found/i.test(err), error: err.slice(0, 120) };
+  };
+  const preflightChildRepo = async (task) => {
+    const repository = String(task.repository || '');
+    if (!repository) return; // 本仓（默认路径）不查
+    const hit = loadChildRepos().find(r => r && r.fullName === repository);
+    if (!hit) return;        // 不是声明的子仓 → 本项不适用
+    const base = `repos/${repository}/contents`;
+    let docText = null, docAbsent = false, docError = null;
+    for (const name of ['AGENTS.md', 'CLAUDE.md']) {
+      const r = await ghRaw(`${base}/${name}`);
+      if (r.ok) { docText = r.text; docAbsent = false; break; }
+      if (r.notFound) { docAbsent = true; continue; }
+      docError = r.error; break;
+    }
+    let pin = null, pinAbsent = false, pinError = null;
+    const pr = await ghRaw(`${base}/.dao/conventions.json`);
+    if (pr.ok) { try { pin = JSON.parse(pr.text); } catch { pinError = '不是 JSON'; } }
+    else if (pr.notFound) pinAbsent = true;
+    else pinError = pr.error;
+    const verdict = judgeRepo({ repo: hit, sample: { docText, docAbsent, docError, pin, pinAbsent, pinError }, expectedVersion: truthVersion() });
+    if (verdict.state !== 'green') {
+      throw fail('UNSUPPORTED_CAPABILITY', `子仓不符合约定脊柱，拒派（${verdict.code}）：${verdict.why}`);
+    }
+  };
   const headOf = async (workdir, ref = 'HEAD') => {
     const result = await git(['rev-parse', ref], { cwd: workdir });
     const head = String(result?.out || '').trim();
@@ -314,6 +364,8 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
 
   return {
     async prepare(task) {
+      // T37 ④：起树之前先过子仓符合性——不符合就不起树（省掉整轮白做）。
+      await preflightChildRepo(task);
       const repo = projectPath(task.repository);
       // 公约「开工前先 pull」的机械版：**起树前先 fetch**——`ensureGitWorkspace` 拿 `origin/master`
       // 当基线，本地那份过期就会从旧 master 起树，别的机器刚合的改动全看不见（用户 2026-09-19 提）。
