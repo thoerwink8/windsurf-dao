@@ -95,6 +95,7 @@ jobs:
       # （不校验的下载 = 「装上了」不等于「装的是那份」）。
       - name: fleet 集成测试（固定版本 Temporal CLI）
         working-directory: packages/fleet
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/temporal_cli.tar.gz \

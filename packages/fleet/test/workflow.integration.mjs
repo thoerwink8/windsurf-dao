@@ -27,6 +27,10 @@ function activities(overrides = {}) {
     lead: async () => ({ plan: 'Implement.' }),
     execute: async task => ({ repository: task.repository, head: H, checkpoint: 'code' }),
     verify: async () => ({ scanned: true, head: H, checks: [{ name: 'check', status: 'COMPLETED', conclusion: 'SUCCESS' }] }),
+    // T33/T34 之后 runner 会调这两个活动——假活动里没有，工作流就卡在「activity not found」的重试上。
+    // 这正是 #1422 的由来：fleet 测试不在 CI 面上，改坏了只有本地跑的人知道。
+    selfReview: async () => ({ scanned: true, head: H, findings: [] }),
+    changedFiles: async () => ({ scanned: true, files: ['scripts/lib/x.mjs'] }),
     review: async () => ({ completed: true, head: H, findings: [], identityVerified: true, executorFamily: 'xai', reviewerFamily: 'anthropic' }),
     integrate: async task => ({ repository: task.repository, issue: task.issue, pr: 19, merged: true, sourceHead: H, mergeCommit: M, baseRefName: 'master' }),
     deploy: async () => ({ checked: true, healthy: true, commit: M }),
