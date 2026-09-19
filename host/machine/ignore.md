@@ -23,3 +23,4 @@
 | ~/.ssh/id_rsa | 只出现在 ACP 白名单的单测字符串里（「词首 `~` 展开成家目录」的拒绝样本），本机 dao 不读它——凭据归各自链路管。不是产品落点，不进 INDEX |
 | ~/x | 只出现在 acp-session-runner 的注释里（解释「词首 `~` 才会展开」的举例），不是任何代码会读的落点。不进 INDEX |
 | ~/.dao/retired-orca-20260908 | 退役 Orca 的整目录备份（#1150 之后留在旧机上的死重，实测 714M）。不是产品落点、dao 不读它；换机不要拷（拷贝只占盘） |
+| ~/.dao/leg-expiry.json | 腿的生命周期**观测**（探针写：每条腿的 lastOkAt/observedUntil/lastError）。运行时自建、可丢可重算；声明在 docs/execution-profiles.json（进 git），观测刻意在仓外——派生数据不进 git（#1395） |
