@@ -89,3 +89,67 @@ test('判账本：超期红 / 条数超阈红 / 空绿 / 没读成 unscanned', a
   assert.equal(judgeDebt({ items: null, now: Date.parse(NOW) }).state, 'unscanned');
   assert.equal(judgeDebt({ items: [] }).state, 'unscanned');
 });
+
+test('锚点：取指纹前 8 位，稳定且带 DAO-DEBT 前缀', async () => {
+  const { debtFingerprint, debtMarker } = await MOD;
+  const fp = debtFingerprint({ file: 'scripts/x.mjs', line: 12, type: 'perf' });
+  assert.equal(debtMarker(fp), `DAO-DEBT:${fp.slice(0, 8)}`);
+  assert.equal(debtMarker(fp), debtMarker(fp));
+  assert.equal(debtMarker('').length, 'DAO-DEBT:'.length);
+});
+
+test('重查即重算：标记在=复现；标记没了但文件也没了=可关；其余一律判不了', async () => {
+  const { debtFingerprint, debtMarker, judgeRecheck } = await MOD;
+  const mk = (file, id) => ({ fingerprint: debtFingerprint({ file, line: 1, type: 'perf', id }), file });
+  const [still, gone, unmarked] = [mk('a.mjs'), mk('b.mjs'), mk('c.mjs')];
+  const r = judgeRecheck({
+    items: [still, gone, unmarked],
+    markers: new Set([debtMarker(still.fingerprint)]),
+    files: new Set(['a.mjs', 'c.mjs']),
+  });
+  assert.deepEqual(r.open.map((i) => i.file), ['a.mjs']);
+  assert.deepEqual(r.resolved.map((i) => i.file), ['b.mjs']);
+  assert.deepEqual(r.resolved.map((i) => i.evidence), ['file-gone']);
+  assert.deepEqual(r.unscanned.map((i) => i.file), ['c.mjs']);
+  assert.deepEqual(r.unscanned.map((i) => i.evidence), ['marker-missing']);
+  assert.equal(r.state, 'unscanned');
+});
+
+test('重查：判不了的条目不许当已修——「扫不到」与「扫完没有」分得开', async () => {
+  const { debtFingerprint, judgeRecheck } = await MOD;
+  const items = [{ fingerprint: debtFingerprint({ id: 'x' }), file: 'a.mjs' }];
+  assert.equal(judgeRecheck({ items, markers: new Set(), files: new Set(['a.mjs']) }).state, 'unscanned');
+  assert.equal(judgeRecheck({ items, markers: [], files: new Set(['a.mjs']) }).state, 'unscanned');
+  assert.equal(judgeRecheck({ items, markers: new Set(), files: ['a.mjs'] }).state, 'unscanned');
+  assert.equal(judgeRecheck({ items: null, markers: new Set(), files: new Set() }).state, 'unscanned');
+  assert.equal(judgeRecheck({ items: [], markers: new Set(), files: new Set() }).state, 'green');
+});
+
+test('重查：没位置的条目（只有 id）判不了，不会因为「文件不在」被误关', async () => {
+  const { debtFingerprint, judgeRecheck } = await MOD;
+  const r = judgeRecheck({
+    items: [{ fingerprint: debtFingerprint({ id: 'no-loc' }), file: '' }],
+    markers: new Set(), files: new Set(),
+  });
+  assert.equal(r.resolved.length, 0);
+  assert.deepEqual(r.unscanned.map((i) => i.evidence), ['marker-missing']);
+});
+
+test('应用重查：只关判「可关」的，带证据进 closed，其余原地不动', async () => {
+  const { applyRecheck } = await MOD;
+  const r = applyRecheck({
+    items: [
+      { fingerprint: 'aaaa', file: 'a.mjs', line: 1, type: 'perf', severity: 'P2', count: 2 },
+      { fingerprint: 'bbbb', file: 'b.mjs', line: 3, type: 'ui', severity: 'P3', count: 1 },
+    ],
+    closed: [{ fingerprint: 'old' }],
+    resolved: [{ fingerprint: 'aaaa', evidence: 'file-gone' }],
+    now: NOW,
+  });
+  assert.equal(r.closedCount, 1);
+  assert.deepEqual(r.items.map((i) => i.fingerprint), ['bbbb']);
+  assert.equal(r.closed.length, 2);
+  assert.equal(r.closed[1].evidence, 'file-gone');
+  assert.equal(r.closed[1].closedAt, NOW);
+  assert.equal(r.closed[0].fingerprint, 'old');
+});
