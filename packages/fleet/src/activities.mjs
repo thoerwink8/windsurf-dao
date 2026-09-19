@@ -361,6 +361,14 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
         await sleepFn(15000);
       }
     },
+    /** T34：改动文件清单（风险分层用）。取不到/为空 → `scanned:false`，调用方按 T2 保守走全流程。 */
+    async changedFiles(task, artifact) {
+      const base = `origin/${task.contract.targetBranch}`;
+      const r = await git(['diff', '--name-only', `${base}...${artifact.head}`], { cwd: artifact.checkpoint });
+      if (!gitOk(r)) return { scanned: false, files: [] };
+      const files = String(r.out || '').split('\n').map((s) => s.trim()).filter(Boolean);
+      return { scanned: files.length > 0, files };
+    },
     /** T33：两级审查的第一级——lead 自审。产出与 review 同形但**不参与判定**：
      *  解析不出来/会话没跑完都只当「这一层没捞到」，不挡任务（判定权在异厂审查与代码）。 */
     async selfReview(task, artifact, { checks, plan } = {}) {
