@@ -99,6 +99,10 @@ export function judgeDelivery(task, head, evidence) {
 export function classifyStepFailure(error) {
   const code = error?.code;
   if (code === 'CANCELLED') return 'cancelled';
+  // T39 ①「阶段停滞」：本步**超预算**（Temporal 的 startToCloseTimeout 到点 = 确定性 timer 判的
+  // 「这一步没进展」）。它既不是「没查成」（unscanned），也不该当瞬时故障重试——预算已经烧完。
+  // 单独一态：停下等裁决（T39 ④ 会上报），别拿重试去刷同一堵墙。
+  if (code === 'TIMEOUT' || code === 'STALL') return 'stall';
   if (['AUTH_REQUIRED', 'PERMISSION_DENIED', 'INVALID_CONTRACT', 'INVALID_MODEL', 'UNSUPPORTED_CAPABILITY'].includes(code)) return 'blocked';
   // 上游**容量满**（429 / at-capacity / 容量已满）不是「要人介入」，也不是普通瞬时故障：
   // 它是全队共享的资源条件，要**长退避等待**（分钟级），不该烧完 5 次小退避就 block

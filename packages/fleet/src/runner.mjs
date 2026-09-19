@@ -173,6 +173,9 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
     const code = error?.code || error?.cause?.type || (error?.name === 'CancelledFailure' ? 'CANCELLED' : 'UNKNOWN');
     if (code === 'CANCELLED') return finish('cancelled', 'cancelled');
     const detail = String(error?.cause?.message || error?.message || '').slice(0, 160);
-    return finish('blocked', `step-failed:${code}${detail ? `：${detail}` : ''}`, { failureClass: classifyStepFailure({ code, reason: detail }) });
+    const failureClass = classifyStepFailure({ code, reason: detail });
+    // T39 ①：停滞单独说——「本步超预算、phase 没进展」，别混进 step-failed:UNKNOWN。
+    if (failureClass === 'stall') return finish('blocked', `step-stalled:${state.phase}`, { failureClass });
+    return finish('blocked', `step-failed:${code}${detail ? `：${detail}` : ''}`, { failureClass });
   }
 }
