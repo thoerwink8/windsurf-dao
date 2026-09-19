@@ -49,9 +49,13 @@ status: retired
 ```
 
 - **没标过 = 没复核过**，计入待处置（不许当已读）；待处置堆到 5 条 → 红。
+- **`reviewed` 的口径**：标一次 = **轻过一遍**（职责是否仍成立 + 一眼扫内容漂移）；
+  **深排每季度一次**（逐条重验内容），深排发现的问题开单，不靠这一行字。轻过 ≠ 内容全对。
 - 三态：读不到 = 没查成（退出码 2），不许当「没有落后文档」。
 - 跑法：`node scripts/docs-retire.mjs`（0=绿 / 1=红 / 2=没查成）；并入 `repo-hygiene` 同出口。
-- 档案目录（`decisions/` `observations/` `exams/` `retired/`）**永不进判据**。
+- 档案目录（`decisions/` `observations/` `exams/` `retired/`）**永不进判据**；
+  下发产物（`docs/global-CLAUDE.md` → `~/.claude/CLAUDE.md`）也不进——它由 `onboard-check` 的漂移闸管
+  （改了会与家目录那份漂移），不是「会漂移的说明文档」。
 - 与 #1487 的边界：#1487 管**引用腐烂**（指针指向空气）；本机制管**文档本体落后**。
 
 ## 联动退出（开了 GitHub 单之后，清单怎么收摊）

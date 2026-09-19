@@ -1,3 +1,7 @@
+---
+reviewed: 2026-09-19
+---
+
 # CLI 踩坑教学：Codex（`codex` CLI，模型 gpt-5.6-sol，审官默认）
 
 > **Orca 执行体已退役（#1150）。** 现役审官由 `dao.mjs reviewer-create` 起 mirasim 会话，不要再 `worker-start --agent codex`。

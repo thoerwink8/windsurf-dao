@@ -1,3 +1,7 @@
+---
+reviewed: 2026-09-19
+---
+
 # CLI 踩坑教学（cli-notes）
 
 每个 CLI 一份踩坑教学 md。**改代码/派工前先读对应文件 + `docs/model-routing.toml` 对应 `[providers.*]` 段**。

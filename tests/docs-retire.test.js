@@ -57,7 +57,8 @@ test('「没查成」与「没有落后文档」分得开', async () => {
   assert.match(assessDocs({ unscanned: 'x' }).lines[0], /不是「没有落后文档」/);
 });
 
-test('档案目录不进判据（判例档案永不退役）', async () => {
-  const { ARCHIVE_DIRS } = await MOD;
+test('档案目录不进判据（判例档案永不退役）；下发产物也不进（归 onboard 漂移闸管）', async () => {
+  const { ARCHIVE_DIRS, EXEMPT_FILES } = await MOD;
   assert.deepEqual([...ARCHIVE_DIRS], ['decisions', 'observations', 'exams', 'retired']);
+  assert.deepEqual([...EXEMPT_FILES], ['docs/global-CLAUDE.md']);
 });

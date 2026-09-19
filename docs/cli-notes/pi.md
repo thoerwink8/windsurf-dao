@@ -1,3 +1,7 @@
+---
+reviewed: 2026-09-19
+---
+
 # CLI 踩坑教学：pi / gw（#822 起非 GPT 工人默认宿主）
 
 > 提炼自 `docs/model-routing.toml [providers.gw]`。选型只认 `docs/model-routing.json`。

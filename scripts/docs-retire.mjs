@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ARCHIVE_DIRS, DOCS_DIR_REL, assessDocs, judgeDocsRetire, parseDocMeta } from './lib/docs-retire.mjs';
+import { ARCHIVE_DIRS, DOCS_DIR_REL, EXEMPT_FILES, assessDocs, judgeDocsRetire, parseDocMeta } from './lib/docs-retire.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -24,6 +24,7 @@ function listDocs() {
   if (r.status !== 0) return { ok: false, error: `git ls-files 没跑成（${String(r.stderr || '').trim().slice(0, 100)}）` };
   const all = String(r.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
   const live = all.filter((p) => {
+    if (EXEMPT_FILES.includes(p)) return false;
     const rest = p.slice(DOCS_DIR_REL.length + 1);
     const head = rest.includes('/') ? rest.split('/')[0] : '';
     return !ARCHIVE_DIRS.includes(head);
@@ -47,7 +48,7 @@ const verdict = judgeDocsRetire(assessed);
 
 if (json) {
   process.stdout.write(`${JSON.stringify({
-    docsDir: DOCS_DIR_REL, archiveDirs: ARCHIVE_DIRS, scanned: loaded.ok ? loaded.docs.length : null,
+    docsDir: DOCS_DIR_REL, archiveDirs: ARCHIVE_DIRS, exemptFiles: EXEMPT_FILES, scanned: loaded.ok ? loaded.docs.length : null,
     archived: loaded.ok ? loaded.archived : null, mode: assessed.mode, unscanned: !!assessed.unscanned, verdict,
     pending: (assessed.pending || []).map((d) => d.name), overdue: (assessed.overdue || []).map((d) => d.name),
     never: (assessed.never || []).map((d) => d.name), lines: assessed.lines,
@@ -55,7 +56,7 @@ if (json) {
 } else {
   const mark = verdict.state === 'green' ? '✓' : verdict.state === 'red' ? '✗' : '?';
   process.stdout.write(`${mark} 文档清退 — ${verdict.why}\n`);
-  if (loaded.ok) process.stdout.write(`   扫了 ${loaded.docs.length} 条活文档（档案目录 ${loaded.archived} 条不进判据）\n`);
+  if (loaded.ok) process.stdout.write(`   扫了 ${loaded.docs.length} 条活文档（档案目录 ${loaded.archived} 条、下发产物 ${EXEMPT_FILES.length} 条不进判据）\n`);
   for (const l of assessed.lines) process.stdout.write(`   ${l}\n`);
 }
 process.exit(verdict.state === 'green' ? 0 : verdict.state === 'red' ? 1 : 2);

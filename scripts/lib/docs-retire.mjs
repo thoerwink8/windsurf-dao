@@ -16,6 +16,11 @@
 export const DOCS_DIR_REL = 'docs';
 /** 档案目录：判例档案，永不进清退判据（拍板：删掉等于篡改历史）。 */
 export const ARCHIVE_DIRS = Object.freeze(['decisions', 'observations', 'exams', 'retired']);
+/**
+ * 不进清退判据的单文件：**下发产物**——它改了会与家目录那份漂移，
+ * 由 onboard-check 的漂移闸管（真相源与 live 逐字比），不是「漂移的说明文档」。
+ */
+export const EXEMPT_FILES = Object.freeze(['docs/global-CLAUDE.md']);
 export const DEFAULT_OVERDUE_DAYS = 90;
 export const DEFAULT_MAX_PENDING = 5;
 
