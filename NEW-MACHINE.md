@@ -574,6 +574,65 @@ node src/cli.mjs status --repo thoerwink8/windsurf-dao --issue <N> [--generation
 node src/cli.mjs signal --repo thoerwink8/windsurf-dao --issue <N> [--generation G] --name resume|cancel
 ```
 
+### 编排面迁移清单（换服务器时照这张表做）
+
+换机时「编排面」（Temporal + fleet worker + 一圈常驻单元）要按这张表重建；**先分类再动手**——
+凭据与账本要带，运行态可重算，死重不要搬（2026-09-19 实测：旧机上 `~/.dao/commander` 2.1G、
+`~/.dao/retired-orca-20260908` 714M 都是退役物，别拷）。
+
+| 类别 | 落点 | 怎么办 |
+|---|---|---|
+| **必带** | `~/.dao/apps/*.json`（GitHub App 凭据）、`~/.mirasim/keys/`、`~/.mirasim/run/`（回环令牌）、`~/.ssh/` | 手动带（§4 的口径：凭据不拷进 git、不进聊天） |
+| **必带**（要续跑在途任务时） | `~/.dao/temporal/temporal.db` | 停 `dao-fleet-temporal` 后再拷；或在旧机把在途任务收尾/取消，新机从零起 |
+| **建议带** | `~/.dao/ledger/`、`~/.dao/issue-gateway/`（幂等账） | 审计与幂等靠它们；体积小 |
+| **可重算** | `~/.dao/execution/`（租约/登记/会话记录）、`~/.mirasim/insights/`、`~/.dao/browser-profile/`、`~/.dao/preflight/`、`node-compile-cache` | 不带；新机跑起来自然重建（历史成功率会从零开始） |
+| **不要带** | `~/.dao/commander/`、`~/.dao/retired-orca-20260908`、`~/.dao/agent-stall-watch.json` | 退役物，拷过去只是占盘 |
+
+重建顺序（每一步都可单独重跑，幂等）。**一条命令的版本**（推荐；含逐项读回验收）：
+
+```bash
+sudo node scripts/bootstrap-server.mjs --dry-run       # 先看它要做什么
+sudo node scripts/bootstrap-server.mjs                 # 装 + 验（读回 is-active / NEXT 是时间 / 启动行）
+sudo node scripts/bootstrap-server.mjs --prune-legacy  # 顺带把旧链路单元停用（stop + disable，不删数据）
+```
+
+它只做**编排面**（本仓单元 + onboard）；Mirasim/key/Clash/ssh 归 ai-gateway-stack。
+清单在 `scripts/bootstrap-server.mjs` 顶部（编排面 ORCHESTRATION / 旧链路 LEGACY_UNITS / 读回 READBACK），
+`tests/bootstrap-server.test.js` 盯着「清单与仓库对得上」——清单漂了会当场红。
+
+手工版（想逐步做时用）：
+
+```bash
+# ① 本仓接线：全局约定 / skills / memory / pi 扩展（onboard 只修它能修的，其余只报）
+git clone https://github.com/thoerwink8/windsurf-dao.git /srv/projects/windsurf-dao
+cd /srv/projects/windsurf-dao && node scripts/onboard.mjs
+
+# ② 单元：一圈常驻单元各有一个 install-*.sh（编排面是 install-fleet.sh）
+sudo bash scripts/install-fleet.sh          # dao-fleet-temporal + dao-fleet-worker
+sudo bash scripts/install-dao-sync.sh       # 主树跟 origin/master
+sudo bash scripts/install-land.sh           # 收工推主分支
+# …其余按需（ls scripts/install-*.sh 是全集；每个脚本头部写了自己装什么、怎么验）
+
+# ③ 上机钩子的 manifest：单元清单与特权行钉在 scripts/dao-install-units.sh，
+#    新机装单元前它会比对（对不上拒装）；仓里新增单元要同步补 manifest。
+sudo -n /usr/local/sbin/dao-install-units    # 装完自检；dao-check 第 ㊳ 项也查它
+```
+
+验收（「装上了」不算，要读回「在跑」）：
+
+```bash
+systemctl is-active dao-fleet-temporal dao-fleet-worker dao-sync.timer
+systemctl list-timers --no-pager | grep -E "dao-|release"      # NEXT 必须是时间
+journalctl -u dao-fleet-worker -n 20 -o cat | grep "worker 已启动"
+cd /srv/projects/windsurf-dao && node scripts/dao-check.mjs    # 代码面
+# 编排面冒烟：起一个只改文档的小任务，盯它走到 completed（见 packages/fleet/README.md 的「一次真实闭环」）
+```
+
+**归属提醒**（`host/machine/INDEX.md`）：编排面/单元/装机脚本归**本仓**；Mirasim、key、Clash、
+ssh 接线、代理归 **ai-gateway-stack**（`node deploy/mirasim-bootstrap.mjs <别名>` 一句话装机 +
+`node deploy/machine-check.mjs` 本机体检）。**不要再新开第三个「装机仓」**——那是第三个家，
+会重新长一套约定与检查。
+
 ### 搬过去之后本仓的红项变化（实测）
 
 orca 一进 PATH，那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。

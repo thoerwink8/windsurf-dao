@@ -116,6 +116,34 @@ fleet **不做**以下事情：
 - **不自动买/扩资源**——账户池、算力、Temporal 集群容量需运维预先备好。
 - **会话不碰凭据**——lead / executor / reviewer 的 AI 会话只改代码、写计划、出审查 JSON；git 身份、push token、issue 正文读写等由系统活动（`activities.mjs` + `gh-as.mjs`）在会话外完成。
 
+## 一次真实闭环（2026-09-19，可复现）
+
+这是本链路**第一次在真机上跑完整环**的记录，用来对照「什么算跑通」——每一步都要有**回读到的证据**，
+不采信任何一方（工人/审查者/系统）的口头声明。
+
+任务：issue #1454「给 `packages/fleet` 补 README」（本文件就是它的产物）。
+
+| 阶段 | 实际发生 | 证据（回读） |
+|---|---|---|
+| prepare | 建任务树 `dao-issue-1454-g4`、设 git 身份、按 lock 装依赖 | `prepared.head` + `checkpoint` 路径 |
+| lead | 主脑会话读**系统塞进提示词的 issue 正文** → 输出计划 JSON | 计划 JSON 落 checkpoint |
+| execute | 执行体会话改文件并提交；系统 push + 开 draft PR | commit `cd77803bd`；PR **#1467** |
+| verify | 系统读 PR 的 checks（不是让工人自报） | `check` = SUCCESS，绑同一 HEAD |
+| review | **异厂**会话（executor=cursor 系、reviewer=grok 系）在独立检出上审同一 HEAD | findings JSON（2 条 P2 建议，无 P1） |
+| integrate | 回读 PR 的 head + 目标枝 → `pr ready` → `--squash --match-head-commit` → 回读合并结果 | PR **MERGED** `1b7e2cd88e` |
+| closeIssue | 走 issue 网关关单 → **回读 `CLOSED`** | issue **#1454 CLOSED**，评论带幂等标记 |
+
+最终 `temporal workflow query … --type status` 返回 `state: completed`。
+
+复现要点：
+
+- 起任务只给 issue 号与三条腿的执行档；issue 正文、身份、依赖、push、PR、合并、关单全在系统侧，
+  会话不碰凭据（见「已知边界」）。
+- 中途任何一步「没查成」（旧 HEAD 证据、审查没做完、检查未全绿、合并/关单未回读）都**不放行**：
+  任务停在 `blocked` 等人，而不是猜着往下走。
+- 上游瞬时故障（容量 503、断流、ACP 启动超时）判**可重试**；容量满另走长退避等待；
+  等待用户回答单列一态（不重试、不空转）。
+
 ## 源码索引
 
 | 文件 | 职责 |
