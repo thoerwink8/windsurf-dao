@@ -1,3 +1,7 @@
+---
+reviewed: 2026-09-19
+---
+
 # CLI 踩坑教学：飞书（`lark-cli`）
 
 > 不是派工工人 CLI。日常加群、放行名单、启停适配器见 `host/skills/feishu-ops/SKILL.md`。

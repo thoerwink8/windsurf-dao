@@ -1,3 +1,7 @@
+---
+reviewed: 2026-09-19
+---
+
 # CLI 踩坑教学：Claude（`reclaude` CLI，模型 opus）
 
 > **Orca 执行体已退役（#1150）。** 现役工人由 `dao.mjs dispatch` 起 mirasim 会话，不要再 `orca terminal create`。

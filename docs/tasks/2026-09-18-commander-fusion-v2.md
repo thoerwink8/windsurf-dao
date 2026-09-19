@@ -1,3 +1,7 @@
+---
+reviewed: 2026-09-19
+---
+
 # 指挥官 + Fusion v2：贴近 Devin Fusion 的落地方案
 
 > 起因：用户 2026-09-18 拍板——Devin Desktop 的 Fusion 设计很好，希望 windsurf-dao 在法国 VPS 上

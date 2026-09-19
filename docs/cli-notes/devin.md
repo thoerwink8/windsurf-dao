@@ -1,3 +1,7 @@
+---
+reviewed: 2026-09-19
+---
+
 # CLI 踩坑教学：Devin（`devin` CLI，模型 deepseek-v4-flash-max）
 
 > 每条都是实测踩出来的，不是推理。改代码/派工前先读本页 + `docs/model-routing.toml [providers.devin]`。

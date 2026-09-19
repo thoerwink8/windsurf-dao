@@ -1,3 +1,7 @@
+---
+reviewed: 2026-09-19
+---
+
 # Execution catalog: evidence and integration
 
 Observed 2026-09-09 UTC on the France host. Implementation lives in

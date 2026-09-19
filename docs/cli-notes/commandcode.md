@@ -1,3 +1,7 @@
+---
+reviewed: 2026-09-19
+---
+
 # CLI 踩坑教学：Command Code（`cmdc`，非交互查证/测速专用）
 
 > 提炼自 `docs/model-routing.toml [providers.commandcode]`。
