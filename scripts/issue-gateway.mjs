@@ -18,6 +18,7 @@ import {
 const VERB = {
   create: 'issue_create',
   comment: 'issue_comment',
+  'comment-upsert': 'issue_comment_upsert',
   close: 'issue_close',
   reopen: 'issue_reopen',
   'edit-labels': 'issue_edit_labels',
@@ -26,9 +27,10 @@ const VERB = {
 
 function usage(msg) {
   if (msg) console.error(msg);
-  console.error('用法: node scripts/issue-gateway.mjs <create|comment|close|reopen|edit-labels|milestone> --repo owner/name --host <宿主> --idempotency-key <键> ...');
+  console.error('用法: node scripts/issue-gateway.mjs <create|comment|comment-upsert|close|reopen|edit-labels|milestone> --repo owner/name --host <宿主> --idempotency-key <键> ...');
   console.error('  create      --title ... [--body-file f | --body ...] [--label x]');
   console.error('  comment     --issue N [--body-file f | --body ...]');
+  console.error('  comment-upsert --issue N --marker <认领标记> [--body-file f | --body ...]   # 有则改、无则发（T44）');
   console.error('  close       --issue N [--reason completed] [--comment ...]');
   console.error('  reopen      --issue N [--comment ...]');
   console.error('  edit-labels --issue N [--add x] [--remove y]');
@@ -62,6 +64,7 @@ export function parseGatewayArgv(argv) {
       catch (e) { return { ok: false, error: `读 --body-file 失败：${String(e.message || e).slice(0, 160)}` }; }
     }
     else if (v === '--issue') a.issue = next();
+    else if (v === '--marker') a.marker = next();
     else if (v === '--milestone') a.milestone = next();
     else if (v === '--reason') a.reason = next();
     else if (v === '--comment') a.comment = next();
