@@ -22,18 +22,20 @@ const VERB = {
   close: 'issue_close',
   reopen: 'issue_reopen',
   'edit-labels': 'issue_edit_labels',
+  'edit-title': 'issue_edit_title',
   milestone: 'issue_milestone',
 };
 
 function usage(msg) {
   if (msg) console.error(msg);
-  console.error('用法: node scripts/issue-gateway.mjs <create|comment|comment-upsert|close|reopen|edit-labels|milestone> --repo owner/name --host <宿主> --idempotency-key <键> ...');
+  console.error('用法: node scripts/issue-gateway.mjs <create|comment|comment-upsert|close|reopen|edit-labels|edit-title|milestone> --repo owner/name --host <宿主> --idempotency-key <键> ...');
   console.error('  create      --title ... [--body-file f | --body ...] [--label x]');
   console.error('  comment     --issue N [--body-file f | --body ...]');
   console.error('  comment-upsert --issue N --marker <认领标记> [--body-file f | --body ...]   # 有则改、无则发（T44）');
   console.error('  close       --issue N [--reason completed] [--comment ...]');
   console.error('  reopen      --issue N [--comment ...]');
   console.error('  edit-labels --issue N [--add x] [--remove y]');
+  console.error('  edit-title  --issue N --title "..."');
   console.error('  milestone   --issue N --milestone <标题或号>   # 挂进里程碑（T30）');
   console.error('禁止旗标: --identity --token --role --cmd（身份由网关固定，不能选）');
   process.exit(2);

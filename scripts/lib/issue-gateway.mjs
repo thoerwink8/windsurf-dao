@@ -11,7 +11,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ghAs, loadRoleCreds } from './gh.mjs';
 
-export const ACTIONS = ['issue_create', 'issue_comment', 'issue_comment_upsert', 'issue_close', 'issue_reopen', 'issue_edit_labels', 'issue_milestone'];
+export const ACTIONS = ['issue_create', 'issue_comment', 'issue_comment_upsert', 'issue_close', 'issue_reopen', 'issue_edit_labels', 'issue_edit_title', 'issue_milestone'];
 export const MARSHAL_LOGIN = 'dao-marshal[bot]';
 export const MARSHAL_APP = 'app/dao-marshal';
 export const DEFAULT_ALLOWED_REPOS = [
@@ -247,6 +247,13 @@ export function validateRequest(req = {}) {
     out.issue = issue;
     out.add = add;
     out.remove = remove;
+  } else if (action === 'issue_edit_title') {
+    const issue = String(req.issue ?? '').trim();
+    if (!/^\d+$/.test(issue)) return fail('reject_input', 'edit-title 要 issue 号');
+    const title = String(req.title || '').trim();
+    if (!title) return fail('reject_input', 'edit-title 要 title');
+    out.issue = issue;
+    out.title = title;
   }
   return { ok: true, request: out };
 }
@@ -398,8 +405,21 @@ function performReopen(req, deps) {
 }
 
 /** 把 issue 挂进里程碑（T30）。里程碑用标题或号都行——标题先查号（查不到=没查成，不猜）；
- *  挂完**回读自证**：回读的 milestone.number 必须等于挂的那个号，否则不算成。 */
+ *  挂完**回读自证**：回读的 milestone.number 必须等于挂的那个号，否则不算成。
+ *  `--milestone none` = 摘回 backlog（无里程碑），回读必须是 null。 */
 function performMilestone(req, deps) {
+  if (req.milestone === 'none') {
+    const payload = writePayload(deps, { milestone: null });
+    if (!payload.ok) return fail('payload', payload.error);
+    const r0 = runMarshal(['api', '-X', 'PATCH', `repos/${req.repo}/issues/${req.issue}`, '--input', payload.file], deps);
+    if (!r0 || !r0.ok) return fail('gh_write', `摘里程碑失败：${r0 && r0.error ? r0.error : '没查成'}`);
+    const viewed0 = readIssue(req.repo, req.issue, deps);
+    if (!viewed0.ok) return viewed0;
+    if (viewed0.json.milestone) {
+      return fail('incomplete_receipt', `摘了里程碑但回读还在「${viewed0.json.milestone.title || '?'}」`);
+    }
+    return { ok: true, action: req.action, repo: req.repo, number: Number(req.issue), url: viewed0.json.url || null, milestone: null, replay: false };
+  }
   let number = /^\d+$/.test(req.milestone) ? Number(req.milestone) : null;
   if (number === null) {
     const listed = runMarshal(['api', `repos/${req.repo}/milestones?state=all&per_page=100`], deps);
@@ -501,6 +521,17 @@ function performCommentUpsert(req, deps) {
   };
 }
 
+/** 改标题（把标题里的手写分类前缀迁成标签后，标题要清干净）。回读自证：标题必须等于新标题。 */
+function performEditTitle(req, deps) {
+  const r = runMarshal(['issue', 'edit', req.issue, '--repo', req.repo, '--title', req.title], deps);
+  if (!r || !r.ok) return fail('gh_write', `edit-title 失败：${r && r.error ? r.error : '没查成'}`);
+  const viewed = readIssue(req.repo, req.issue, deps);
+  if (!viewed.ok) return viewed;
+  const got = String(viewed.json.title || '');
+  if (got !== req.title) return fail('incomplete_receipt', `标题回读是「${got.slice(0, 60)}」，不是新标题`);
+  return { ok: true, action: req.action, repo: req.repo, number: Number(req.issue), url: viewed.json.url || null, title: got, replay: false };
+}
+
 function perform(req, deps) {
   switch (req.action) {
     case 'issue_create': return performCreate(req, deps);
@@ -509,6 +540,7 @@ function perform(req, deps) {
     case 'issue_close': return performClose(req, deps);
     case 'issue_reopen': return performReopen(req, deps);
     case 'issue_edit_labels': return performEditLabels(req, deps);
+    case 'issue_edit_title': return performEditTitle(req, deps);
     case 'issue_milestone': return performMilestone(req, deps);
     default: return fail('reject_input', `未知动作 ${req.action}`);
   }
@@ -623,4 +655,7 @@ export function issueMilestone(fields, deps) {
 }
 export function issueEditLabels(fields, deps) {
   return applyIssueWrite({ ...fields, action: 'issue_edit_labels' }, deps);
+}
+export function issueEditTitle(fields, deps) {
+  return applyIssueWrite({ ...fields, action: 'issue_edit_title' }, deps);
 }

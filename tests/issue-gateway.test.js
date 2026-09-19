@@ -453,6 +453,37 @@ describe('issue-gateway CLI', () => {
   });
 });
 
+describe('issue-gateway edit-title（标题前缀迁成标签后清干净）', () => {
+  it('校验：缺 issue / title 都拒', async () => {
+    const G = await LIB_LOAD;
+    const base = { action: 'issue_edit_title', repo: 'thoerwink8/windsurf-dao', issue: '5', title: 't', host: 'devin', idempotency_key: 'k' };
+    assert.equal(G.validateRequest({ ...base, issue: '' }).stage, 'reject_input');
+    assert.equal(G.validateRequest({ ...base, title: '' }).stage, 'reject_input');
+  });
+
+  it('改标题：回读等于新标题才算成', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeMarshal({ view: marshalIssue({ number: 5, title: '新标题' }) });
+    const r = G.applyIssueWrite(
+      { action: 'issue_edit_title', repo: 'thoerwink8/windsurf-dao', issue: '5', title: '新标题', host: 'devin', idempotency_key: 'k-title-1' },
+      { dir: tmp(), runMarshal: fake.runMarshal },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.title, '新标题');
+  });
+
+  it('回读标题对不上 → incomplete_receipt（不算成）', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeMarshal({ view: marshalIssue({ number: 5, title: '旧标题' }) });
+    const r = G.applyIssueWrite(
+      { action: 'issue_edit_title', repo: 'thoerwink8/windsurf-dao', issue: '5', title: '新标题', host: 'devin', idempotency_key: 'k-title-2' },
+      { dir: tmp(), runMarshal: fake.runMarshal },
+    );
+    assert.equal(r.ok, false);
+    assert.equal(r.stage, 'incomplete_receipt');
+  });
+});
+
 describe('issue-gateway comment-upsert（T44：有则改、无则发）', () => {
   function fakeUpsert({ existing = [], patched, posted } = {}) {
     const calls = [];
@@ -557,5 +588,18 @@ describe('issue-gateway comment-upsert（T44：有则改、无则发）', () => 
     assert.equal(second.ok, true, JSON.stringify(second));
     assert.equal(second.replay, false, '第二次不许被重放拦下');
     assert.equal(fake.calls.filter((a) => a[2] === 'PATCH').length, 2);
+  });
+});
+
+describe('issue-gateway milestone none（摘回 backlog）', () => {
+  it('milestone=none → 回读必须为空才算成', async () => {
+    const G = await LIB_LOAD;
+    const fake = fakeMarshal({ view: marshalIssue({ number: 5 }) });
+    const r = G.applyIssueWrite(
+      { action: 'issue_milestone', repo: 'thoerwink8/windsurf-dao', issue: '5', milestone: 'none', host: 'devin', idempotency_key: 'k-ms-clear' },
+      { dir: tmp(), runMarshal: fake.runMarshal },
+    );
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.milestone, null);
   });
 });
