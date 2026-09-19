@@ -33,7 +33,7 @@ import {
   checkUsageInstallCopy,
   walkUsageInstallFiles,
   judgeUsageInstallCopy,
-  DAO_CHECK_NESTED_TIMEOUT_MS,
+  classifyRepoSelfCheck,
   classifyReclaudeNonCc,
 } from '../scripts/server-check.mjs';
 import { classifyLandTimer, LAND_TIMER, LAND_INSTALL } from '../scripts/lib/land-automation.mjs';
@@ -1102,18 +1102,54 @@ test('⑳ 有效单元含 drop-in + 探活 ExecStart 活体样本（#1164）', a
   });
 });
 
-test('#984 ⑪ 预算 60s；orca 产品面检查已删', () => {
-  assert.equal(DAO_CHECK_NESTED_TIMEOUT_MS, 60_000, '⑪ 预算必须是 60s——改回 180s/600s 这条要红');
+test('⑪ 读账不重跑（2026-09-20，替代 #984 的 60s 嵌套预算）；orca 产品面检查已删', () => {
   const src = readFileSync(SERVER_CHECK_SRC, 'utf8');
-  assert.match(src, /timeout: DAO_CHECK_NESTED_TIMEOUT_MS/,
-    '⑪ 必须用命名常量，不许再写 180000/600000');
-  assert.doesNotMatch(src, /timeout:\s*180000/,
-    '⑪ 不许再写 180s 硬编码');
-  assert.match(src, /dao-check 自己 \$\{ms\}ms/,
-    '⑪ detail 必须带 dao-check 自己的耗时');
+  // #984 的前提（dao-check ~15s）烂了之后，嵌套跑=每次 60s 超时 unknown。不许再嵌套 spawn dao-check。
+  assert.doesNotMatch(src, /'dao-check\.mjs'\)\]/, '⑪ 不许再嵌套 spawn scripts/dao-check.mjs——读账（self-check-ledger）');
+  assert.doesNotMatch(src, /DAO_CHECK_NESTED_TIMEOUT_MS/, '嵌套预算常量已随嵌套跑一起退役');
+  assert.match(src, /readSelfCheckRecord\(REPO_ROOT\)/, '⑪ 必须读本树的自检账');
   for (const name of ['① orca 在 PATH', '④ runtime 可达', '⑨ 本仓已注册进 orca']) {
     assert.equal(src.includes(name), false, `${name} 必须已删，不许再挂退役牌`);
   }
+});
+
+test('⑪ 三态：账落后本树 HEAD → unknown（不是绿）；同 HEAD code≠0 → red；同 HEAD code 0 → ok；没账/没 HEAD → unknown', () => {
+  const H = 'a'.repeat(40);
+  const rec = (o) => ({ root: '/srv/x', head: H, code: 0, ms: 91000, red: 0, green: 275, skip: 18, ts: '2026-09-20T00:31:00.000Z', ...o });
+
+  // 残缺/伪造账（同 HEAD）不许变绿也不许变红——只能没样本（审官 #1542 P1）。
+  for (const broken of [
+    { head: H, code: 0 },
+    rec({ code: '0' }),
+    rec({ red: -1 }),
+    rec({ ms: undefined }),
+    rec({ ts: 'yesterday' }),
+    rec({ head: H.slice(0, 7) }),
+    rec({ head: [H] }),            // 审官第二轮样本 1：数组 head 经 String() 洗白
+    rec({ code: 0, red: 3 }),      // 审官第二轮样本 2：code 0 却带红项
+    rec({ code: 1, red: 0 }),
+  ]) {
+    const r = classifyRepoSelfCheck({ probed: true, head: H, record: broken });
+    assert.equal(r.state, 'unknown', JSON.stringify(broken));
+    assert.match(r.detail, /不完整/);
+  }
+
+  const behind = classifyRepoSelfCheck({ probed: true, head: H, record: rec({ head: 'b'.repeat(40) }) });
+  assert.equal(behind.state, 'unknown');
+  assert.match(behind.detail, /还没跟上/);
+
+  const red = classifyRepoSelfCheck({ probed: true, head: H, record: rec({ code: 1, red: 3 }) });
+  assert.equal(red.state, 'red');
+  assert.equal(red.count, 3);
+  assert.match(red.detail, /红 3 项/);
+
+  const ok = classifyRepoSelfCheck({ probed: true, head: H, record: rec() });
+  assert.equal(ok.state, 'ok');
+  assert.equal(ok.count, 0);
+  assert.match(ok.detail, /91s/);
+
+  assert.equal(classifyRepoSelfCheck({ probed: false, reason: 'ENOENT', head: H }).state, 'unknown');
+  assert.equal(classifyRepoSelfCheck({ probed: true, record: rec(), head: '' }).state, 'unknown');
 });
 
 test('(25) reclaude non-cc-client 三态：窗口内命中 red，窗口外 ok，无样本/陈旧 unknown', () => {

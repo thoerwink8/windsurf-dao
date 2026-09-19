@@ -131,6 +131,7 @@
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { writeSelfCheckRecord } from './lib/self-check-ledger.mjs';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -3383,6 +3384,20 @@ function checkIssueGatewayAliveNow() {
 
 const secs = ((Date.now() - t0) / 1000).toFixed(1);
 const noteBit = notes.length ? `，${notes.length} 条可见` : '';
+
+// 出口记一条账（~/.dao/dao-check/<本树>.json）：server-check ⑪ 读它，不再嵌套重跑本脚本。
+// best-effort：账写不进去只打一行，不改本次退出码。
+{
+  const headRun = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8', windowsHide: true });
+  const w = writeSelfCheckRecord({
+    root: ROOT,
+    head: headRun.status === 0 ? headRun.stdout.trim() : '',
+    code: failures.length === 0 ? 0 : 1,
+    ms: Date.now() - t0,
+    red: failures.length, green: greens.length, skip: skips.length,
+  });
+  if (!w.ok) console.log(`  见  自检账没写成（${w.reason}）：${w.path}`);
+}
 
 if (failures.length === 0) {
   for (const g of greens) console.log(`  ok  ${g}`);

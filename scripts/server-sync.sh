@@ -56,6 +56,14 @@ relink() {
 # 错误落 mktemp，不写固定的 /tmp/dao-sync.err：2026-09-05 单元从 root 改成 orca 之后，
 # 那个固定名字还是上一轮 root 建的、orca 写不进去，重定向失败让整个 if 判成「合并失败」——
 # 于是每一轮都报「主树无法快进」，同步实际停摆，而单元照样 exit 0 看着一切正常。
+# HEAD 变了才跑一次仓库自检并记账（~/.dao/dao-check/）——server-check ⑪ 读账不重跑。
+# 服务器只拉不推，land.mjs 那条「推之前跑检查」在这台机永远不触发，此前没人在服务器上跑过 dao-check。
+# 已有本 HEAD 的账时安静退出（不刷 journal）；红了只打日志不挡同步——发现面在 server-check ⑪。
+self_check() {
+  set +e; (cd "$REPO" && node scripts/self-check-if-changed.mjs --root "$REPO"); set -e
+  return 0
+}
+
 ERRF=$(mktemp -t dao-sync.XXXXXX)
 trap 'rm -f "$ERRF"' EXIT
 
@@ -72,6 +80,7 @@ if [ "$before" = "$after" ]; then
   echo "已是最新 ${after:0:7}"
   relink
   install_units
+  self_check
   exit 0
 fi
 echo "主树 ${before:0:7} → ${after:0:7}"
@@ -82,3 +91,4 @@ if g diff --name-only "$before" "$after" | grep -qE "$BOT_PATHS"; then
 fi
 relink
 install_units
+self_check
