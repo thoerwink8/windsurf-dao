@@ -265,7 +265,7 @@ function parseJsonOut(r, stage, what) {
 }
 
 function readIssue(repo, number, deps) {
-  const r = runMarshal(['issue', 'view', String(number), '--repo', repo, '--json', 'number,url,title,state,author,labels,closedAt'], deps);
+  const r = runMarshal(['issue', 'view', String(number), '--repo', repo, '--json', 'number,url,title,state,author,labels,closedAt,milestone'], deps);
   return parseJsonOut(r, 'gh_readback', `回读 issue #${number}`);
 }
 
