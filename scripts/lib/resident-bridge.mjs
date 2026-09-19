@@ -1,9 +1,14 @@
 // 常驻面「一行桥」解析与闸（#1524 附带）。
 //
 // 2026 最佳实践：AGENTS.md 当唯一真相源（Codex/Cursor/Copilot/Windsurf 原生读它），
-// CLAUDE.md 留一行 `@AGENTS.md`——Anthropic 文档原话「Claude Code reads CLAUDE.md, not
-// AGENTS.md」，并推荐用 import 而非 symlink（symlink 在 Windows 检出时退化成「内容只有
-// AGENTS.md 五个字」的普通文件，Edit/Write 还写不进去）。
+// CLAUDE.md 留一行 `@AGENTS.md`。
+// Claude Code 侧的时间线（别照抄旧博客——它们早于这个版本）：
+//   · < 2.1.277：只读 CLAUDE.md，AGENTS.md 完全不可见 ⇒ 必须有桥。
+//   · ≥ 2.1.277（2026-09-18）：项目里没有 CLAUDE.md 时回退读 AGENTS.md
+//     （官方 CHANGELOG；`/config` → Project instructions 可切 claude/agents-fallback/both/none；
+//      暂不支持 Bedrock/Vertex/Foundry）。
+// 桥因此是**版本无关**的解：新旧都读得到。等所有在役安装都 ≥ 2.1.277 再谈删桥。
+// 为什么不用 symlink：Windows 检出会退化成「内容只有 AGENTS.md 五个字」的普通文件，Edit 也写不进去。
 //
 // 三个坑，闸就是为它们配的：
 //   ① 写在反引号 / 代码块里的 `@AGENTS.md` **不导入**——最常见的「桥悄悄没生效」；

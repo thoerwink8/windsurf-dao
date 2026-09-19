@@ -4,7 +4,7 @@
 
 这个仓库是 AI 协作约定的家。**当前处于编排态**（2026-09-06 拍板，见 `docs/decisions/2026-09-06-orchestration-mode-restored.md`）：编排、派工、审官跑在 Linux 服务器上，执行体是 mirasim，Orca 已退役。流程类规矩收在 dispatch skill（`host/skills/dispatch/SKILL.md`），派单前按需读，不常驻本页。
 
-**本文件是所有执行体（Claude / Codex / Cursor…）的唯一真相源**：`CLAUDE.md` 只是一行 `@AGENTS.md` 桥——Claude Code 只读 `CLAUDE.md`、不读 `AGENTS.md`（Anthropic 文档原话），桥把这份拉进它的上下文。改约定改这里，别去改桥。
+**本文件是所有执行体（Claude / Codex / Cursor…）的唯一真相源**：`CLAUDE.md` 只是一行 `@AGENTS.md` 桥。Claude Code 要到 **2.1.277** 才「项目里没有 CLAUDE.md 时回退读 AGENTS.md」（`/config` → Project instructions），更早的版本只读 CLAUDE.md——VPS 上 reclaude 自带的那份是 2.1.260/2.1.274，所以**桥暂时删不得**。改约定改这里，别去改桥。
 
 ## 怎么工作
 
