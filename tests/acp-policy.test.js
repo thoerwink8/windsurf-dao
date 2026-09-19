@@ -140,7 +140,7 @@ test('worktree execute scopes literal path arguments to the tree', async t => {
   const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'dao-acp-wt-out-')));
   t.after(() => fs.rmSync(outside, { recursive: true, force: true }));
   fs.mkdirSync(path.join(cwd, 'nested'));
-  const rule = { toolKinds: ['execute'], workdir: cwd, worktreeScope: true, commandPrefixes: [['cat'], ['grep'], ['test'], ['git', 'status']] };
+  const rule = { toolKinds: ['execute'], workdir: cwd, worktreeScope: true, commandPrefixes: [['cat'], ['grep'], ['test'], ['git', 'status'], ['git', 'commit']] };
   const scope = title => acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`' + title + '`' } }, { cwd });
   // 树内的只读巡检照常放行。
   assert.ok(scope('cat README.md'), 'bare filename resolves inside the tree');
@@ -154,7 +154,16 @@ test('worktree execute scopes literal path arguments to the tree', async t => {
   assert.equal(scope('grep --file=/etc/passwd x'), null, 'flag=value paths are checked too');
   assert.equal(scope('grep -f/etc/passwd x'), null, 'short option with attached absolute path is refused');
   assert.equal(scope('grep -nf/etc/passwd x'), null, 'clustered short option with attached path is refused');
+  assert.equal(scope('grep -ivnf/etc/passwd x'), null, '多字母簇附着路径也拒（复核实咬：扫描窗只有 3 字符时漏）');
+  assert.equal(scope('grep -abcdef/etc/passwd x'), null, '长字母簇附着路径也拒');
   assert.equal(scope('sed -f../../outside/secret x'), null, 'attached dot-dot escape is refused');
+  assert.equal(scope('git commit -m"fix a /b bug"')?.permission, 'worktree_scoped', '引号内的斜杠是内容不是路径');
+  if (process.platform !== 'win32') {
+    // 树内符号链接指向树外：bare 名也要跟 symlink（复核实咬：只查带 `/` 的词会漏）。
+    fs.symlinkSync(outside, path.join(cwd, 'leak'));
+    assert.equal(scope('cat leak'), null, '树内 symlink 指向树外要拒');
+    assert.equal(scope('cat leak/secret'), null, 'symlink 下的路径也要拒');
+  }
   assert.equal(scope('cat /etc/passwd && git status'), null, 'one out-of-tree segment refuses the whole chain');
   // 值在树内的紧贴写法照常放行。
   assert.equal(scope('grep -f nested/pattern.txt x')?.permission, 'worktree_scoped', 'attached in-tree value stays allowed');

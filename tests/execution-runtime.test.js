@@ -552,6 +552,21 @@ linuxTest('ensureGitWorkspace reuses a detached review tree at its deterministic
   assert.equal(second.path,first.path);
 });
 
+linuxTest('ensureGitWorkspace refuses a detached tree that belongs to another branch',t=>{
+  const {dir,repo,git}=gitRepo(t);
+  // slot/branch 与 slot-branch 归一化后撞同一路径：树是被别的分支 detach 的，不许复用（复核实咬）。
+  const first=ensureGitWorkspace(repo,'slot/branch',{homeDir:dir,base:'HEAD'});
+  git(['checkout','--detach','HEAD'],first.path);
+  assert.throws(()=>ensureGitWorkspace(repo,'slot-branch',{homeDir:dir,base:'HEAD'}),/unregistered worktree path already exists/);
+});
+
+linuxTest('ensureGitWorkspace refuses a detached tree with no branch marker',t=>{
+  const {dir,repo,git}=gitRepo(t);
+  const target=path.join(dir,'mirasim-worktrees',path.basename(fs.realpathSync(repo)),'legacy-slot');
+  git(['worktree','add','--detach',target,'HEAD']); // 绕过 ensureGitWorkspace 建的树没有分支标记
+  assert.throws(()=>ensureGitWorkspace(repo,'legacy/slot',{homeDir:dir,base:'HEAD'}),/unregistered worktree path already exists/);
+});
+
 linuxTest('ensureGitWorkspace still refuses the slot when a different branch occupies it',t=>{
   const {dir,repo}=gitRepo(t);
   // slot/branch 与 slot-branch 会算出同一个目标路径；占位者是别的分支（非 detached）时必须照旧拒绝。

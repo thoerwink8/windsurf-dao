@@ -54,17 +54,23 @@ export function ensureGitWorkspace(repo,branch,{homeDir=os.homedir(),base='origi
   const root=fs.realpathSync(repo);const git=args=>String(exec('git',['-C',root,...args],{encoding:'utf8',stdio:['ignore','pipe','pipe']})).trim();
   git(['check-ref-format','--branch',branch]);
   const target=path.join(homeDir,'mirasim-worktrees',path.basename(root),branch.replace(/[^\w.-]/g,'-'));
+  // 每棵自建树在它的 git 管理目录里留一枚分支标记：树被 checkout --detach 后，分支行会从
+  // worktree list 消失（只剩 detached），此时**只有路径**能认出树位——而路径由分支名归一化而来，
+  // 不同分支可能撞同一路径（`slot/branch` 与 `slot-branch`）。没有标记就无法证明这棵树是为
+  // 这个分支建的，所以标记缺失/不符一律拒绝（复核实咬：旧写法只凭 dir===target && detached）。
+  const markerOf = dir => path.join(String(exec('git',['-C',dir,'rev-parse','--absolute-git-dir'],{encoding:'utf8',stdio:['ignore','pipe','pipe']})).trim(),'dao-branch');
+  const markedBranch = dir => { try { return fs.readFileSync(markerOf(dir),'utf8').trim(); } catch { return null; } };
   const blocks=git(['worktree','list','--porcelain']).split(/\n\n/);
   for(const b of blocks){const lines=b.split('\n');const dir=lines.find(l=>l.startsWith('worktree '))?.slice(9);if(!dir||!fs.existsSync(dir))continue;
-    // 按分支名找是主路。审查树在 review 里被 checkout --detach 后分支行消失（只剩 detached 行），
-    // 只认分支名会让重试把已有树判成「未注册占位」而永久卡死（g1 实咬）。目标路径由分支名
-    // 确定性推出：路径相符且处于 detached 就是这棵树的树位，直接复用；占位是别的分支仍拒绝。
-    if(lines.includes('branch refs/heads/'+branch)||(dir===target&&lines.includes('detached'))){attachControlPlaneHooksOrThrow(dir);return {path:dir,branch,created:false,verified:true};}}
+    const onBranch=lines.includes('branch refs/heads/'+branch);
+    const detachedOwned=dir===target&&lines.includes('detached')&&markedBranch(dir)===branch;
+    if(onBranch||detachedOwned){attachControlPlaneHooksOrThrow(dir);return {path:dir,branch,created:false,verified:true};}}
   if(fs.existsSync(target))throw new Error('unregistered worktree path already exists: '+target);
   fs.mkdirSync(path.dirname(target),{recursive:true});let exists=false;try{git(['show-ref','--verify','--quiet','refs/heads/'+branch]);exists=true;}catch{}
   if(exists)git(['worktree','add',target,branch]);else git(['worktree','add','-b',branch,target,base]);
   const head=String(exec('git',['-C',target,'symbolic-ref','--short','HEAD'],{encoding:'utf8'})).trim();
   if(head!==branch)throw new Error('created worktree has wrong branch');
+  try{fs.writeFileSync(markerOf(target),branch+'\n');}catch{/* 写不上标记不挡开工：detached 复用时缺标记会拒，fail-closed */}
   attachControlPlaneHooksOrThrow(target);
   return {path:target,branch,created:true,verified:true};
 }

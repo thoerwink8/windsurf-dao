@@ -225,27 +225,28 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
     // 前缀只判命令名、不看参数：`cat /home/orca/.dao/apps/marshal.json` 会因 `cat` 命中前缀
     // 而被自动放行——那是读树外凭据，不是树内巡检（2026-09-18 发现）。字面参数里带 `/` 或
     // `..` 的按路径判：解析后必须留在树内；`~`/`$` 展开已由 commandWords 拒绝。
+    // 逐词判路径：
+    //  · 纯旗标不是路径；但要防「值紧贴在短选项后」——`-f/etc/passwd`、`-ivnf/etc/passwd`
+    //    （多字母簇）都在**选项部分**（第一个空白之前）里找首个 `/` 或 `..`，从那里取候选。
+    //    只看选项部分是为了不误杀引号内的内容（`-m"fix a /b bug"` 里的 `/b` 是数据）。
+    //  · 其余词一律 canonicalPath（跟符号链接）：树内 symlink 指向树外（`leak -> /etc`）也要拒。
+    const resolvesInside = value => {
+      const resolved = canonicalPath(value, cwd);
+      return resolved !== null && (resolved === cwd || resolved.startsWith(cwd + path.sep));
+    };
     const inTree = words => words.every(word => {
-      const candidates = [];
       if (word.startsWith('--')) {
-        if (word.includes('=')) candidates.push(word.slice(word.indexOf('=') + 1));
-      } else if (word.startsWith('-') && word.length > 1) {
-        // 单横线短选项可能把值紧贴在字母后：`-f/etc/passwd`、`-nf/etc/passwd`——只查整词会把它
-        // 当相对路径（<cwd>/-f/etc/passwd）放行，而 grep/sed 实际读的是树外文件（复核实咬）。
-        // 在头 3 个字符里找路径起点（`/` 或 `..`），从那里取候选；找不到就按无附着值处理。
-        // 代价：`-e's/x/y/'` 这类少见写法会被拒 → 退化成权限提问，fail-closed。
-        const rest = word.slice(1);
-        for (let j = 1; j <= 3 && j < rest.length; j += 1) {
-          if (rest[j] === '/' || rest.startsWith('..', j)) { candidates.push(rest.slice(j)); break; }
-        }
-      } else {
-        candidates.push(word);
+        if (!word.includes('=')) return true;
+        return resolvesInside(word.slice(word.indexOf('=') + 1));
       }
-      return candidates.every(candidate => {
-        if (!candidate.includes('/') && candidate !== '..') return true;
-        const resolved = canonicalPath(candidate, cwd);
-        return resolved !== null && (resolved === cwd || resolved.startsWith(cwd + path.sep));
-      });
+      if (word.startsWith('-') && word.length > 1) {
+        const option = word.split(/\s/, 1)[0].slice(1);
+        for (let j = 1; j < option.length; j += 1) {
+          if (option[j] === '/' || option.startsWith('..', j)) return resolvesInside(option.slice(j));
+        }
+        return true;
+      }
+      return resolvesInside(word);
     });
     if (!worktree) {
       if (actualCwd === undefined) return null;
