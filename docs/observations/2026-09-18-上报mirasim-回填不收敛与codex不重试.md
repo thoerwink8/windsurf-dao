@@ -1,5 +1,5 @@
 ---
-status: new
+status: done
 to: mirasim 侧（E 类 ai-gateway-stack，本仓改不动）
 ---
 
@@ -36,3 +36,5 @@ mirasim 给 codex app-server 注入 `HTTPS_PROXY=127.0.0.1:36783` + MITM CA，�
 ## 本仓已做的（不需要 mirasim 侧动）
 
 熔断器吃真流量 + relay 独立 key + 审官顺位问熔断（#1369，已合）。这三件只让本仓少往坏腿上派，不解决腿本身。
+
+处置：已上报完毕，三件分别挂 #1333（回填不收敛）与 #1342（codex attempts=1、代理注入）。本仓侧巡检已派工，开关在 mirasim 侧，本仓不再跟。
