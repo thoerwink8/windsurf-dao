@@ -35,6 +35,9 @@ export const WORKTREE_EXECUTE_PREFIXES = Object.freeze([
   Object.freeze(['stat']),
   Object.freeze(['file']),
   Object.freeze(['tree']),
+  // `test -f/-d <路径>`：交卷前判断文件在不在是最常见的自查（g2 实咬：工人写完了
+  // README 却卡在 `test -f` 的权限提问上）。参数路径同样受树内约束，见 acp-session-runner。
+  Object.freeze(['test']),
   Object.freeze(['node', '--test']),
   // 跑仓库自己的测试（改 CI 接线的任务要看测试计数）。**不放 npm ci / npm install**：
   // 那要联网、有供应链面；装依赖由系统在 prepare 阶段按 lock 做好。

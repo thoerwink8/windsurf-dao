@@ -222,6 +222,43 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
     if (!Array.isArray(rule.commandPrefixes) || !rule.commandPrefixes.length) return null;
     const allowed = words => rule.commandPrefixes.some(prefix =>
       Array.isArray(prefix) && prefix.length && prefix.every((word, index) => typeof word === 'string' && word === words[index]));
+    // 前缀只判命令名、不看参数：`cat /home/orca/.dao/apps/marshal.json` 会因 `cat` 命中前缀
+    // 而被自动放行——那是读树外凭据，不是树内巡检（2026-09-18 发现）。字面参数里带 `/` 或
+    // `..` 的按路径判：解析后必须留在树内；`~`/`$` 展开已由 commandWords 拒绝。
+    // 逐词判路径：
+    //  · 纯旗标不是路径；但要防「值紧贴在短选项后」——`-f/etc/passwd`、`-ivnf/etc/passwd`
+    //    （多字母簇）都在**选项部分**（第一个空白之前）里找首个 `/` 或 `..`，从那里取候选。
+    //    只看选项部分是为了不误杀引号内的内容（`-m"fix a /b bug"` 里的 `/b` 是数据）。
+    //  · 其余词一律 canonicalPath（跟符号链接）：树内 symlink 指向树外（`leak -> /etc`）也要拒。
+    const resolvesInside = value => {
+      const resolved = canonicalPath(value, cwd);
+      return resolved !== null && (resolved === cwd || resolved.startsWith(cwd + path.sep));
+    };
+    const inTree = words => words.every(word => {
+      // heredoc 提升出来的占位符（\0H<n>\0）是**消息文本**，不是路径：canonicalPath 见到 NUL 会
+      // 判 null，不跳过就会把 `git commit -m "$(cat <<'EOF' … EOF)"` 整句拒掉（CI 实咬）。
+      if (word.includes('\u0000')) return true;
+      if (word.startsWith('--')) {
+        if (!word.includes('=')) return true;
+        return resolvesInside(word.slice(word.indexOf('=') + 1));
+      }
+      if (word.startsWith('-') && word.length > 1) {
+        // 短选项簇可能把值紧贴在字母后，两种附着都要查：
+        //  · 路径型（`-f/etc/passwd`、`-ivnf/etc/passwd`）：找首个 `/` 或 `..`，从那里取候选；
+        //  · bare 名型（`-fleak`）：簇里没有 `/` 时，逐个后缀当文件名判——树内 symlink 指向树外
+        //    的 `-fleak` 也要拒（复核实咬的相邻缝）。
+        const option = word.split(/\s/, 1)[0].slice(1);
+        for (let j = 1; j < option.length; j += 1) {
+          if (option[j] === '/' || option.startsWith('..', j)) return resolvesInside(option.slice(j));
+        }
+        for (let j = 1; j < option.length; j += 1) {
+          const tail = option.slice(j);
+          if (/^[\w.-]+$/.test(tail) && !resolvesInside(tail)) return false;
+        }
+        return true;
+      }
+      return resolvesInside(word);
+    });
     if (!worktree) {
       if (actualCwd === undefined) return null;
       const words = commandWords(raw.argv ?? raw.command);
@@ -244,7 +281,7 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
     if (line === null && typeof call.title === 'string') line = call.title.trim().replace(/^`(.*)`$/s, '$1');
     if (Array.isArray(line)) {
       const words = commandWords(line);
-      return words && allowed(words) && actualCwd !== undefined ? { ...scope, command: words, permission: 'worktree_scoped' } : null;
+      return words && allowed(words) && inTree(words) && actualCwd !== undefined ? { ...scope, command: words, permission: 'worktree_scoped' } : null;
     }
     if (typeof line !== 'string' || !line.trim()) return null;
     // Only `&&` may join segments. Every other operator (| < > & ; and any
@@ -276,6 +313,7 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
           effective = [words[0], ...words.slice(3)];
         }
         if (!allowed(effective)) return null;
+        if (!inTree(words)) return null;
       }
       parsed.push(words.map(word => restoreHeredocs(word, literals)));
     }

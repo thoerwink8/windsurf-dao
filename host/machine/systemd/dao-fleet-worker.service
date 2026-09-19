@@ -1,0 +1,39 @@
+[Unit]
+Description=DAO fleet worker (durable task sessions: plan→execute→verify→review→merge→close)
+After=network-online.target dao-fleet-temporal.service
+Wants=network-online.target
+Requires=dao-fleet-temporal.service
+
+# 装法（幂等，要 root）：bash scripts/install-fleet.sh
+#
+# 一个 worker 就是一台执行节点：它从 Temporal 领任务，在本机建树、起会话、跑检查、合并、关单。
+# 多台 VPS = 多份这个单元 + 同一份 Temporal（任务队列按名字汇合）。任务身份与判定在
+# packages/fleet/src（契约/运行器/工作流），本单元只负责把它跑起来。
+#
+# DAO_FLEET_PROJECTS：仓 → 本机 checkout 的映射。没有映射的仓会被拒（不猜路径）。
+# 换机要改的只有这一行与 WorkingDirectory。
+#
+# DAO_REAL_EXECUTOR=1：执行体隔离闸的显式放行——只有生产入口（本单元）与人工命令能起真会话；
+# 测试环境不设这个变量，注入 fake runtime。
+
+[Service]
+Type=simple
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+# #792：自动化服务不继承个人 GH_TOKEN。
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+# REQUIRES_GIT_PUSH=1：worker 要写远端 git（activities 里 push 任务分支）。
+# 所以**不能**设 GH_CONFIG_DIR=/var/empty——那会让 gh 凭据助手找不到 hosts.yml。
+# 判据与反向闸见 scripts/lib/issue-gateway-check.mjs 与 tests/systemd-push-declaration.test.js。
+Environment=HOME=/home/orca
+Environment=DAO_REAL_EXECUTOR=1
+Environment=DAO_FLEET_TEMPORAL=127.0.0.1:7233
+Environment=DAO_FLEET_QUEUE=dao-fleet
+Environment=DAO_FLEET_PROJECTS={"thoerwink8/windsurf-dao":"/srv/projects/windsurf-dao"}
+ExecStart=/usr/bin/node packages/fleet/src/cli.mjs worker
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

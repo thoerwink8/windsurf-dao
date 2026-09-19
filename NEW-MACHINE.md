@@ -540,6 +540,40 @@ systemctl list-timers release-train.timer      # 在册且 enabled
 
 真发版留给合并后 timer 首次触发；人工只该跑到 `plan` 与 `release --dry-run`（别在真仓手打 tag / 建 Release，会污染版本历史）。触发阈值/发布日/档位表都在 `docs/release-policy.json`，改动走 PR。
 
+### Fleet（#816，任务内 Fusion + 独立审查的新执行链路）
+
+一个任务 = 一个持久工作流：`prepare → lead → execute → verify → review → integrate → closeIssue`；
+任务身份 `dao/<仓>/issue/<号>/g<代>` 贯穿所有代次，判定全在代码里（`packages/fleet/src/contract.mjs`，
+模型只产内容）。装一次（幂等，要 root；先撤同名 transient 单元再装文件单元）：
+
+```bash
+cd /srv/projects/windsurf-dao
+sudo bash scripts/install-fleet.sh
+```
+
+装出两只常驻单元（源在 `host/machine/systemd/`）：`dao-fleet-temporal`（Temporal 服务端，
+**单节点 + SQLite——不是生产形态**，多节点高可用要换 PostgreSQL 持久化部署，那是下一步）
+与 `dao-fleet-worker`（领任务、建树、起会话、合并、关单；`DAO_FLEET_PROJECTS` 是
+「仓 → 本机 checkout」映射，没映射的仓直接拒）。数据落 `/home/orca/.dao/temporal/`。
+
+升版 = 拉代码 + 重启 worker（任务状态在 Temporal 里，重启不丢在途任务）：
+
+```bash
+cd /srv/projects/windsurf-dao && git pull --ff-only
+sudo systemctl restart dao-fleet-worker
+systemctl is-active dao-fleet-temporal dao-fleet-worker
+```
+
+起任务 / 查状态 / 发信号（`--lead/executor/reviewer-profile` 从 `docs/execution-profiles.json` 取，
+executor 与 reviewer 必须异厂）：
+
+```bash
+cd /srv/projects/windsurf-dao/packages/fleet
+node src/cli.mjs start  --repo thoerwink8/windsurf-dao --issue <N> --lead-profile <p> --executor-profile <p> --reviewer-profile <p>
+node src/cli.mjs status --repo thoerwink8/windsurf-dao --issue <N> [--generation G]
+node src/cli.mjs signal --repo thoerwink8/windsurf-dao --issue <N> [--generation G] --name resume|cancel
+```
+
 ### 搬过去之后本仓的红项变化（实测）
 
 orca 一进 PATH，那批「云上注定红」当场少一半：完整测试套从 4 条红降到 1 条 leaf（`resolveMainWorktreeRoot 认出本仓主树`，断言 checkout 目录名以 `windsurf-dao` 结尾；服务器上目录名对了就自己绿）。`dao-check` 挂上 skills 软链后到 85 绿 / 2 红，剩的两条是「没有托管账号」和上面那条 ledger 环境红。
