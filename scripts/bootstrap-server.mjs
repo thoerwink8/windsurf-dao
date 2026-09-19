@@ -21,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DRY = process.argv.includes('--dry-run');
 const PRUNE = process.argv.includes('--prune-legacy');
+/** 服务用户的家：单元里 User=orca / HOME=/home/orca；清单要读它名下的 shim / versions / 凭据。 */
+const SERVICE_HOME = process.env.DAO_SERVICE_HOME || '/home/orca';
 
 /** 编排面：新链路要装的单元族（每个 install-<name>.sh 幂等，头部写清装什么/怎么验）。 */
 const ORCHESTRATION = [
@@ -143,9 +145,10 @@ function main() {
   }
 
   say('\n⑤ 机器级清单（OS / Node / 执行体 / 工具 / 凭据落点；读不到算「没查成」）');
-  if (DRY) say('  [拟] node scripts/machine-inventory.mjs');
+  if (DRY) say('  [拟] DAO_INVENTORY_HOME=<服务用户家> node scripts/machine-inventory.mjs');
   else {
-    const inv = run('node', [join(ROOT, 'scripts', 'machine-inventory.mjs')]);
+    // 以 root 跑（才读得到 /etc/sudoers.d），但家目录指向**服务用户**（凭据/shim/versions 都在它名下）。
+    const inv = run('node', [join(ROOT, 'scripts', 'machine-inventory.mjs')], { env: { ...process.env, DAO_INVENTORY_HOME: SERVICE_HOME } });
     say(String(inv.stdout || '').split('\n').slice(-3).join('\n'));
     if (inv.status !== 0) say('  （清单有红或没查成——逐条看上面的报告，别当装好了）');
   }
