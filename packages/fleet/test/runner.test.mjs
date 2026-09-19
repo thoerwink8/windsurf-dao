@@ -43,12 +43,12 @@ describe('one durable task owns execution, review, rework and closure', () => {
   it('T32：P2/P3（advisory）随 delivery 走到 closeIssue，不被丢掉', async () => {
     let seen = null;
     const f = fixture({
-      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: [{ id: 'minor', severity: 'P2', detail: 'Minor.' }] }),
+      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: [{ id: 'minor', severity: 'P2', type: 'perf', detail: 'Minor.' }] }),
       closeIssue: async (_task, delivery) => { seen = delivery; return { repository: 'owner/repo', issue: 17, closed: true }; },
     });
     const result = await runFusionTask(task(), f.io);
     assert.equal(result.state, 'completed');
-    assert.deepEqual(seen.advisory, [{ id: 'minor', severity: 'P2', detail: 'Minor.' }]);
+    assert.deepEqual(seen.advisory, [{ id: 'minor', severity: 'P2', type: 'perf', detail: 'Minor.' }]);
   });
   it('T7：返工反馈里带上一轮执行会话的 key（续跑用）', async () => {
     let seen = null;

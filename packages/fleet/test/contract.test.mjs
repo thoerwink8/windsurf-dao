@@ -66,7 +66,7 @@ describe('review remains independent within the same task', () => {
   });
   it('blocks P1, keeps P2/P3 advisory and preserves stable finding ids', () => {
     const p1 = { id: 'lost-write', severity: 'P1', detail: 'lost write' };
-    const p2 = { id: 'naming', severity: 'P2', detail: 'naming' };
+    const p2 = { id: 'naming', severity: 'P2', type: 'maintainability', detail: 'naming' };
     const r = judgeReview(normalizeTask(input()), HEAD, { ...review(), findings: [p1, p2] });
     assert.equal(r.state, 'blocked');
     assert.deepEqual(r.blocking, [p1]);
@@ -79,6 +79,16 @@ describe('review remains independent within the same task', () => {
       { ...review(), findings: [f, f] },
       { ...review(), findings: [{ ...f, severity: 'P0' }] },
     ]) assert.equal(judgeReview(normalizeTask(input()), HEAD, value).state, 'unscanned');
+  });
+  it('T32：P2/P3 必须带 type（枚举），P1 不用；带了脏位置也拒', () => {
+    const noType = { id: 'a', severity: 'P2', detail: 'd' };
+    const badType = { id: 'b', severity: 'P3', type: 'nonsense', detail: 'd' };
+    const good = { id: 'c', severity: 'P2', type: 'perf', file: 'x.mjs', line: 3, detail: 'd' };
+    assert.equal(judgeReview(normalizeTask(input()), HEAD, { ...review(), findings: [noType] }).state, 'unscanned', 'P2 没 type 必须拒');
+    assert.equal(judgeReview(normalizeTask(input()), HEAD, { ...review(), findings: [badType] }).state, 'unscanned', '脏 type 必须拒');
+    assert.equal(judgeReview(normalizeTask(input()), HEAD, { ...review(), findings: [good] }).state, 'passed');
+    assert.equal(judgeReview(normalizeTask(input()), HEAD, { ...review(), findings: [{ id: 'p', severity: 'P1', detail: 'd' }] }).state, 'blocked', 'P1 不带 type 也要能过');
+    assert.equal(judgeReview(normalizeTask(input()), HEAD, { ...review(), findings: [{ ...good, line: '3' }] }).state, 'unscanned', 'line 不是整数要拒');
   });
 });
 
