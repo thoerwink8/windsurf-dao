@@ -97,6 +97,17 @@ function docsRetire() {
   return { state: doc.verdict.state, why: doc.verdict.why };
 }
 
+// T48：断链闸（#1460 的 `[断链]` 评论有没有人管）。不重造判据——调 break-link 自己。
+function breakLink() {
+  const r = run(process.execPath, [join(ROOT, 'scripts', 'break-link.mjs'), '--json']);
+  let doc;
+  try { doc = JSON.parse(String(r.stdout || '')); } catch {
+    return { state: 'unscanned', why: `break-link 没查成（${String(r.stderr || r.stdout || '').trim().slice(0, 100)}）` };
+  }
+  if (!doc || !doc.verdict) return { state: 'unscanned', why: 'break-link 回执形态不对' };
+  return { state: doc.verdict.state, why: doc.verdict.why };
+}
+
 // #1503：落后单清退。不重造判据——调 issue-retire 自己（它是机械判）。它红时退出码 1，
 // 但 stdout 仍是合法 JSON，所以先看能不能解析，别把「有该清退的」洗成「没查成」。
 function issueRetire() {
@@ -159,6 +170,7 @@ function main() {
   checks.push({ id: 'debt-ledger', kind: '债册子', verdict: debtLedger() });
   checks.push({ id: 'reflow-inbox', kind: '回流收件箱', verdict: reflowInbox() });
   checks.push({ id: 'docs-retire', kind: '文档清退', verdict: docsRetire() });
+  checks.push({ id: 'break-link', kind: '断链闸', verdict: breakLink() });
   checks.push({ id: 'escalation-inbox', kind: '裁决收件箱', verdict: escalationInbox() });
   checks.push({ id: 'stage-board', kind: '阶段盘面', verdict: stageBoard() });
 
