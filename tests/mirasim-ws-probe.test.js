@@ -453,7 +453,9 @@ describe('handshake 是只读：不发 prompt、挂断，但要验 sessions 帧'
     // 这里的意图是「用的是 sessions 预算，不是 6s 的 snapshot 预算」。
     assert.ok(waits[0].timeoutMs >= 1_000, `sessions 预算应是量级秒以上，实得 ${waits[0].timeoutMs}`);
     assert.notEqual(waits[0].timeoutMs, 6_000, '别把 snapshot 预算当成 sessions 预算');
-    assert.equal(rt.config.sessionsTimeoutMs, 30_000);
+    // T40：同理——`rt.config.sessionsTimeoutMs` 也跟着 MIRASIM_LS_TIMEOUT_MS 走，**不抄数字**。
+    assert.ok(rt.config.sessionsTimeoutMs >= 1_000, `sessions 预算应是量级秒以上，实得 ${rt.config.sessionsTimeoutMs}`);
+    assert.notEqual(rt.config.sessionsTimeoutMs, 6_000, 'snapshot 预算（6s）不是 sessions 预算');
   });
 });
 
