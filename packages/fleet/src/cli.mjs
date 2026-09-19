@@ -58,6 +58,9 @@ function run(cmd, argv, { cwd, env, input } = {}) {
 }
 
 async function ghAs(argv, { cwd, role } = {}) {
+  // 参数顺序写反过一次（`ghAs('marshal', [...])`）：那样 role 是 undefined，网关一律拒，
+  // 而调用方只看到「没角色的调用」——真因被盖住。形状不对就大声报，别让它静默。
+  if (typeof argv === 'string' || !Array.isArray(argv)) throw new Error('ghAs 用法错误：第一个参数必须是参数数组，角色放 options.role');
   if (!role) return { ok: false, error: 'gh call without role' };
   return run(process.execPath, [join(REPO_ROOT, 'scripts', 'gh-as.mjs'), role, '--', ...argv], { cwd });
 }
@@ -168,7 +171,7 @@ async function makeActivities() {
     const comment = `fleet：任务 ${task.id} 完成——PR #${delivery.pr} 已合并（${delivery.mergeCommit}），检查全绿、独立审查通过。`;
     const closed = await run(process.execPath, [join(REPO_ROOT, 'scripts', 'issue-gateway.mjs'), 'close', '--repo', task.repository, '--issue', String(task.issue), '--reason', 'completed', '--comment', comment, '--host', 'fleet', '--idempotency-key', `${task.id}-close`]);
     if (!closed.ok) throw Object.assign(new Error(`issue close failed: ${String(closed.error || '').slice(0, 200)}`), { code: 'SERVICE_UNAVAILABLE' });
-    const view = await ghAs('marshal', ['issue', 'view', String(task.issue), '--json', 'state']);
+    const view = await ghAs(['issue', 'view', String(task.issue), '--json', 'state'], { role: 'marshal' });
     if (!view.ok) throw Object.assign(new Error('issue close unverified'), { code: 'SERVICE_UNAVAILABLE' });
     const state = JSON.parse(view.out || '{}').state;
     return { repository: task.repository, issue: task.issue, closed: String(state).toUpperCase() === 'CLOSED' };
