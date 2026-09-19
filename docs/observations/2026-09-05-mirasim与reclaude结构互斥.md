@@ -60,13 +60,14 @@ mirasim 自己的代理。它不是运行时 wrapper。
 
 **两个都要当代理，谁也不肯当上游。**
 
-## 四、没做完的一格（说清边界）
+## 四、没做完的一格（2026-09-19 已补完）
 
-`reclaude` v1.3.0 已装在服务器 `/home/orca/.local/bin/reclaude`，PATH 已通。
-但它启动即走设备授权（浏览器流），用户当时无可用设备，授权未完成。
+原文留的空格是：**在 mirasim 已注入 env 的会话里跑 reclaude，reclaude 能不能盖过
+那组变量**。2026-09-19 授权后实测：**能——reclaude 把 `ANTHROPIC_BASE_URL` 直接
+清空**（它靠 CA 拦截走上游，不靠这个变量），所以不会静默退回 mirasim 中继。
 
-所以这一格没有实测：**在 mirasim 已注入 env 的会话里跑 reclaude，reclaude 能不能
-盖过那组变量**。那是比「mirasim 起 reclaude」更弱的用法，不影响上面的结论
-（上面的结论只依赖 agent 白名单和 claudeBin 用法，两者都已查实）。
+全文与另一条新发现（`agentLaunch` 是热加载的，改完不用重启）见
+`2026-09-19-reclaude接上mirasim-那一格补完.md`。
 
-补这一格只需一次设备授权，路已铺好。
+§二/§三 不受影响：mirasim 仍没有 `reclaude` 这个 agent 类型，`claudeBin` 仍只是
+收 OAuth token 的钩子——「让 mirasim 起 reclaude」依旧没有入口，能用的是反过来。
