@@ -578,7 +578,7 @@ node src/cli.mjs signal --repo thoerwink8/windsurf-dao --issue <N> [--generation
 
 换机时「编排面」（Temporal + fleet worker + 一圈常驻单元）要按这张表重建；**先分类再动手**——
 凭据与账本要带，运行态可重算，死重不要搬（2026-09-19 实测：旧机上 `~/.dao/commander` 2.1G、
-`~/.dao/retired-orca-*` 714M 都是退役物，别拷）。
+`~/.dao/retired-orca-20260908` 714M 都是退役物，别拷）。
 
 | 类别 | 落点 | 怎么办 |
 |---|---|---|
@@ -586,7 +586,7 @@ node src/cli.mjs signal --repo thoerwink8/windsurf-dao --issue <N> [--generation
 | **必带**（要续跑在途任务时） | `~/.dao/temporal/temporal.db` | 停 `dao-fleet-temporal` 后再拷；或在旧机把在途任务收尾/取消，新机从零起 |
 | **建议带** | `~/.dao/ledger/`、`~/.dao/issue-gateway/`（幂等账） | 审计与幂等靠它们；体积小 |
 | **可重算** | `~/.dao/execution/`（租约/登记/会话记录）、`~/.mirasim/insights/`、`~/.dao/browser-profile/`、`~/.dao/preflight/`、`node-compile-cache` | 不带；新机跑起来自然重建（历史成功率会从零开始） |
-| **不要带** | `~/.dao/commander/`、`~/.dao/retired-orca-*`、`~/.dao/agent-stall-watch*` | 退役物，拷过去只是占盘 |
+| **不要带** | `~/.dao/commander/`、`~/.dao/retired-orca-20260908`、`~/.dao/agent-stall-watch.json` | 退役物，拷过去只是占盘 |
 
 重建顺序（每一步都可单独重跑，幂等）。**一条命令的版本**（推荐；含逐项读回验收）：
 
