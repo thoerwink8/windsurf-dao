@@ -6,6 +6,9 @@ _scratch/
 _flow/
 # PR 正文草稿（进 PR body 的文书，不进 git）
 .flow-pr-body.md
+# 同类：仓根手写的 pr-body-*.md（2026-09-19 清掉 3 个误提交的：1116/1184/1253）。
+# 闸：tests/gitignore.test.js 断言「仓根不许有已跟踪的一次性文件」。
+/pr-body-*.md
 # 完工报告草稿：工人写它、`dao.mjs worker-done --body` 读它，读完使命就结束，从来不该被提交。
 # 不 ignore 的后果实测过（2026-09-06）：它以「未跟踪文件」的身份留在工人树里，
 # 而 git worktree remove 见到未跟踪文件就拒删 → board-gc 每一张干完的卡都回收不掉 →
