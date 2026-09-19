@@ -70,8 +70,11 @@ function main() {
 
   if (machines === null) {
     checks.push({ id: 'machines', kind: '机器漂移', verdict: { state: 'unscanned', why: 'DAO_HYGIENE_MACHINES 不是合法 JSON（没查成）' } });
+  } else if (!machines.length) {
+    // 空清单 = 只查本机：这是**配置选择**，不是「探测失败」——长期假红会让这道闸被关掉
+    // （本仓的老话：随机误报的闸最后一定被关掉）。所以留成绿 + 说明，看得见但不当红。
+    checks.push({ id: 'machines', kind: '机器漂移', verdict: { state: 'green', why: '未声明远端机器——只查了本机的仓（要覆盖别的机器就填 DAO_HYGIENE_MACHINES）' } });
   } else {
-    if (!machines.length) checks.push({ id: 'machines', kind: '机器漂移', verdict: { state: 'unscanned', why: '没声明远端机器（DAO_HYGIENE_MACHINES 为空）——只查了本机' } });
     for (const m of machines) {
       const drift = remoteDriftOf(m);
       checks.push({ id: `${m.ssh}:${m.path}`, kind: '机器漂移', verdict: drift.state ? drift : judgeRepoDrift({ ...drift, mustBeClean: m.mustBeClean === true }) });
