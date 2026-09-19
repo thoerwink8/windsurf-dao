@@ -228,6 +228,16 @@ describe('issue-gateway 写入契约', () => {
     assert.equal(fake.calls.filter((c) => c[1] === 'create').length, writes);
   });
 
+  it('milestone（T30）：缺标题/号一律拦住；给号时按号挂', async () => {
+    const { validateRequest } = await import('../scripts/lib/issue-gateway.mjs');
+    const base = { action: 'issue_milestone', repo: 'a/b', host: 'devin', idempotency_key: 'k-m' };
+    assert.equal(validateRequest({ ...base, issue: '12' }).ok, false, '缺 milestone 必须拦住');
+    assert.equal(validateRequest({ ...base, milestone: 'v2.11 期' }).ok, false, '缺 issue 必须拦住');
+    assert.equal(validateRequest({ ...base, issue: 'abc', milestone: 'x' }).ok, false, '坏 issue 必须拦住');
+    const good = validateRequest({ ...base, issue: '12', milestone: '3' });
+    assert.equal(good.ok, true, '给号应通过');
+    assert.equal(good.request.milestone, '3');
+  });
   it('comment / edit-labels / close 走同一入口', async () => {
     const G = await LIB_LOAD;
     const dir = tmp();
