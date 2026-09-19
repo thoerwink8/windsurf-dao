@@ -86,6 +86,17 @@ function reflowInbox() {
   return { state: doc.verdict.state, why: doc.verdict.why };
 }
 
+// T47：文档清退（活文档会不会退役）。不重造判据——调 docs-retire 自己（它已是机械判）。
+function docsRetire() {
+  const r = run(process.execPath, [join(ROOT, 'scripts', 'docs-retire.mjs'), '--json']);
+  let doc;
+  try { doc = JSON.parse(String(r.stdout || '')); } catch {
+    return { state: 'unscanned', why: `docs-retire 没查成（${String(r.stderr || r.stdout || '').trim().slice(0, 100)}）` };
+  }
+  if (!doc || !doc.verdict) return { state: 'unscanned', why: 'docs-retire 回执形态不对' };
+  return { state: doc.verdict.state, why: doc.verdict.why };
+}
+
 // #1503：落后单清退。不重造判据——调 issue-retire 自己（它是机械判）。它红时退出码 1，
 // 但 stdout 仍是合法 JSON，所以先看能不能解析，别把「有该清退的」洗成「没查成」。
 function issueRetire() {
@@ -147,6 +158,7 @@ function main() {
   checks.push({ id: 'issue-retire', kind: '落后单清退', verdict: issueRetire() });
   checks.push({ id: 'debt-ledger', kind: '债册子', verdict: debtLedger() });
   checks.push({ id: 'reflow-inbox', kind: '回流收件箱', verdict: reflowInbox() });
+  checks.push({ id: 'docs-retire', kind: '文档清退', verdict: docsRetire() });
   checks.push({ id: 'escalation-inbox', kind: '裁决收件箱', verdict: escalationInbox() });
   checks.push({ id: 'stage-board', kind: '阶段盘面', verdict: stageBoard() });
 
