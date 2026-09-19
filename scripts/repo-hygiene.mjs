@@ -53,6 +53,17 @@ function prBacklog() {
   return { open: list.map(p => ({ number: p.number, mergeable: p.mergeable, ageDays: (now - Date.parse(p.createdAt)) / 86400000 })) };
 }
 
+// T39 ④ 指挥官侧：裁决收件箱——上报了没人看就是新的静默，所以要有东西盯着它。
+function escalationInbox() {
+  const r = run(process.execPath, [join(ROOT, 'scripts', 'fleet-escalations.mjs'), '--json']);
+  let doc;
+  try { doc = JSON.parse(String(r.stdout || '')); } catch {
+    return { state: 'unscanned', why: `fleet-escalations 没查成（${String(r.stderr || r.stdout || '').trim().slice(0, 100)}）` };
+  }
+  if (!doc || !doc.verdict) return { state: 'unscanned', why: 'fleet-escalations 回执形态不对' };
+  return { state: doc.verdict.state, why: doc.verdict.why };
+}
+
 // T32：债册子（P2/P3 审查发现的账）。同 #1503——调 debt-ledger 自己，别重造判据。
 function debtLedger() {
   const r = run(process.execPath, [join(ROOT, 'scripts', 'debt-ledger.mjs'), '--json']);
@@ -124,6 +135,7 @@ function main() {
 
   checks.push({ id: 'issue-retire', kind: '落后单清退', verdict: issueRetire() });
   checks.push({ id: 'debt-ledger', kind: '债册子', verdict: debtLedger() });
+  checks.push({ id: 'escalation-inbox', kind: '裁决收件箱', verdict: escalationInbox() });
   checks.push({ id: 'stage-board', kind: '阶段盘面', verdict: stageBoard() });
 
   const summary = summarizeHygiene(checks.map(c => c.verdict));
