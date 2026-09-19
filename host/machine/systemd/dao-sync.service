@@ -35,6 +35,10 @@ ProtectSystem=full
 ProtectHome=read-only
 ReadWritePaths=/srv/projects/windsurf-dao /home/orca/.dao /home/orca/.claude /home/orca/.pi /tmp
 PrivateTmp=false
+# 属主自检（2026-09-19 病根，与 ai-gateway-stack 的 ags-sync 同款）：.git 里混进 root
+# 属主的文件时，跑 orca 的同步会「Permission denied」——那是静默 drift 的开始（本次：542 个
+# root 属主文件，checkout 停在 #1515 没人发现）。带修法大声失败：宁可停住，也不静默落后。
+ExecStartPre=/bin/sh -c 'f=$(find /srv/projects/windsurf-dao/.git ! -user orca -print -quit); [ -z "$f" ] || { echo "属主错乱：$f 不是 orca（别用 root 在 orca 的仓里跑 git）；修：sudo chown -R orca:orca /srv/projects/windsurf-dao"; exit 1; }'
 ExecStart=/bin/bash /srv/projects/windsurf-dao/scripts/server-sync.sh
 StandardOutput=journal
 StandardError=journal
