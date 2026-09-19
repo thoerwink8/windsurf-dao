@@ -1,4 +1,5 @@
 import { normalizeTask, judgeReview, judgeChecks, judgeDelivery, classifyStepFailure } from './contract.mjs';
+import { splitFindings } from './triage.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
 const phases = { prepare: 'preparing', lead: 'planning', execute: 'executing', verify: 'verifying', review: 'reviewing', integrate: 'integrating', deploy: 'deploying', closeIssue: 'closing' };
@@ -91,7 +92,9 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
         break;
       }
       // T7：把上一轮执行会话的 key 带进反馈——返工要**续跑同一会话**（上下文还热），不是重开。
-      state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: reviewed.blocking, sessionKey: state.artifact.sessionKey };
+      // T33：返工只带「P1 + 急的 + 便宜且上下文热的」；其余进册子（不啃大改）。
+      const { rework } = splitFindings({ findings: reviewed.advisory, resumable: !!state.artifact.sessionKey });
+      state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: [...reviewed.blocking, ...rework], sessionKey: state.artifact.sessionKey };
       delete state.plan;
       delete state.artifact;
       delete state.checks;
