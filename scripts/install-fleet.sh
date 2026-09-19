@@ -30,10 +30,11 @@ for f in "$UNIT_DIR/dao-fleet-temporal.service" "$UNIT_DIR/dao-fleet-worker.serv
   [[ -f "$f" ]] || { echo "装机源不在：$f" >&2; exit 1; }
 done
 
-# ── 0. 先撤同名 transient 单元 ──
+# ── 0. 先撤同名/旧 transient 单元 ──
 # 早期用 systemd-run 起的 transient 单元会遮住同名文件单元（daemon-reload 也不会换掉它），
-# 而且重启机器就没了。发现就停掉，让下面的文件单元接管。
-for unit in dao-fleet-temporal.service dao-fleet-worker.service; do
+# 而且重启机器就没了。两种都要撤：同名（dao-fleet-*）与**旧名**（dao-temporal-dev，它占着
+# 7233 端口，新单元会 bind 失败进崩溃重启循环——装真单元当场实咬）。
+for unit in dao-fleet-temporal.service dao-fleet-worker.service dao-temporal-dev.service; do
   if [[ "$(systemctl show "$unit" -p FragmentPath --value 2>/dev/null)" == /run/systemd/transient/* ]]; then
     echo "撤 transient 单元：$unit"
     systemctl stop "$unit" || true

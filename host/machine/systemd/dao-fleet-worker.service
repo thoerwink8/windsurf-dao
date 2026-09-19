@@ -13,6 +13,9 @@ Requires=dao-fleet-temporal.service
 # DAO_FLEET_PROJECTS：仓 → 本机 checkout 的映射。没有映射的仓会被拒（不猜路径）。
 # 换机要改的只有这一行与 WorkingDirectory。
 #
+# 值必须用**单引号**包：systemd 会把自己解析的双引号剥掉，`Environment=X={"a":"b"}` 到进程里
+# 会变成 `{a:b}`（JSON 直接解析失败，worker 起不来——装真单元当场实咬）。
+#
 # DAO_REAL_EXECUTOR=1：执行体隔离闸的显式放行——只有生产入口（本单元）与人工命令能起真会话；
 # 测试环境不设这个变量，注入 fake runtime。
 
@@ -30,7 +33,7 @@ Environment=HOME=/home/orca
 Environment=DAO_REAL_EXECUTOR=1
 Environment=DAO_FLEET_TEMPORAL=127.0.0.1:7233
 Environment=DAO_FLEET_QUEUE=dao-fleet
-Environment=DAO_FLEET_PROJECTS={"thoerwink8/windsurf-dao":"/srv/projects/windsurf-dao"}
+Environment='DAO_FLEET_PROJECTS={"thoerwink8/windsurf-dao":"/srv/projects/windsurf-dao"}'
 ExecStart=/usr/bin/node packages/fleet/src/cli.mjs worker
 Restart=always
 RestartSec=10
