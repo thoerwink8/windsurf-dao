@@ -191,8 +191,9 @@ const reviewerPrompt = ({
 }) => `你是本任务的独立审查者，只审 ${task.repository} 的 PR #${artifact.pr}，绑定 HEAD ${artifact.head}。工作目录已检出该 HEAD，不要改代码、不要提交、不要推送。
 必查项：契约要求的检查在 ${artifact.head} 上全绿（当前证据：${JSON.stringify(checks)}，由系统取回，不必自己再查）。不要跑 gh 或联网——需要的外部事实系统已经给你了。
 请给出你的发现，只输出一个 JSON 对象，不要输出其它文字：
-{"findings":[{"id":"<短横线小写短名>","severity":"P1|P2|P3","detail":"<文件:行号 + 现象 + 期望改法>"}]}
-没有任何问题时输出 {"findings":[]}。P1 只用于会导致错误结果、数据丢失、安全或协议破坏的问题；风格与建议用 P3。`;
+{"findings":[{"id":"<短横线小写短名>","severity":"P1|P2|P3","type":"security|data|contract|correctness|perf|maintainability|ui","file":"<文件路径>","line":<行号>,"detail":"<现象 + 期望改法>"}]}
+没有任何问题时输出 {"findings":[]}。P1 只用于会导致错误结果、数据丢失、安全或协议破坏的问题；风格与建议用 P3。
+P2/P3 的 type **必给**（它决定这条债的到期期限，由代码按类型算，不由你判期限）；P1 可不给。file/line 知道就给——它让这条债能被去重累加，不知道可省略。`;
 
 const leadPrompt = ({
   task,

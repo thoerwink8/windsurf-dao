@@ -2,6 +2,8 @@ const SHA = /^[a-f0-9]{40}$/;
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const unknown = reason => ({ state: 'unscanned', reason });
+// T32：债的分类轴（与 scripts/lib/debt-ledger.mjs 的 DEBT_TYPES 同口径）。
+const DEBT_TYPES = ['security', 'data', 'contract', 'correctness', 'perf', 'maintainability', 'ui'];
 
 export function taskIdOf({ repository, issue, generation = 1 } = {}) {
   if (!text(repository) || !positive(issue) || !positive(generation)) throw new Error('invalid task identity');
@@ -51,11 +53,11 @@ export function judgeReview(task, head, review) {
   const seen = new Set();
   for (const finding of review.findings) {
     if (!finding || !text(finding.id) || seen.has(finding.id) || !['P1', 'P2', 'P3'].includes(finding.severity) || !text(finding.detail)) return unknown('review-findings-invalid');
-    // T32：位置/类型是**可选**的（契约先保证 {id,severity,detail}）；带了就必须是干净的值，
-    // 免得脏值进债册子。没带时债册子按 id 兜底指纹（scripts/lib/debt-ledger.mjs）。
+    // T32：位置是**可选**的（知道就给，指纹更准）；**类型是 P2/P3 必给的**——
+    // 债册子按 type×severity 算 SLA（代码算期限，模型只分类），没类型就只能兜底成最松的一类。
     if (finding.file != null && !text(finding.file)) return unknown('review-findings-invalid');
     if (finding.line != null && !Number.isInteger(finding.line)) return unknown('review-findings-invalid');
-    if (finding.type != null && !text(finding.type)) return unknown('review-findings-invalid');
+    if (finding.severity !== 'P1' && !DEBT_TYPES.includes(String(finding.type || '').toLowerCase())) return unknown('review-findings-invalid');
     seen.add(finding.id);
   }
   const blocking = review.findings.filter(finding => finding.severity === 'P1');
