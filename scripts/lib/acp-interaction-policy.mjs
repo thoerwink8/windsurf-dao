@@ -39,6 +39,10 @@ export const WORKTREE_EXECUTE_PREFIXES = Object.freeze([
   // README 却卡在 `test -f` 的权限提问上）。参数路径同样受树内约束，见 acp-session-runner。
   Object.freeze(['test']),
   Object.freeze(['node', '--test']),
+  // 仓库自己的自检脚本：本仓约定「改完跑 dao-check」（CLAUDE.md 明写），工人读了约定就会跑它。
+  // 拦它 = 每个执行会话都要人放行一次（g4 实咬：composer 工人卡在这一步）。它只跑测试、
+  // 报告落 ~/.dao，不改树；跑不跑由工人自己决定（验收仍由系统的 CI 完成）。
+  Object.freeze(['node', 'scripts/dao-check.mjs']),
   // 跑仓库自己的测试（改 CI 接线的任务要看测试计数）。**不放 npm ci / npm install**：
   // 那要联网、有供应链面；装依赖由系统在 prepare 阶段按 lock 做好。
   Object.freeze(['npm', 'test']),

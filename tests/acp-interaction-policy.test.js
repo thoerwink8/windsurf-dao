@@ -58,6 +58,8 @@ test('default worktree rule grants git add inside the tree and refuses rm', asyn
   assert.equal(precommit.permission, 'worktree_scoped');
   // 同一套默认策略：前缀命中不等于读树外凭据放行。
   assert.equal(acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`cat /home/orca/.dao/apps/marshal.json`' } }, { cwd: workdir }), null);
+  // 仓库自己的自检脚本在白名单里（本仓约定「改完跑 dao-check」，拦它每个会话都要人放行一次）。
+  assert.equal(acpPermissionScope(rule, { toolCall: { kind: 'execute', title: '`node scripts/dao-check.mjs`' } }, { cwd: workdir })?.permission, 'worktree_scoped');
 });
 
 test('default policy requires an absolute workdir', async () => {

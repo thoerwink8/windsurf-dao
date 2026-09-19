@@ -8,6 +8,19 @@ const branchOf = task => `dao/issue-${task.issue}-g${task.generation}`;
 // 上层读 error.details[0].sessionKey 会拿到 undefined（实咬过一次）。
 const fail = (code, message, ...details) => ApplicationFailure.nonRetryable(message, code, ...details);
 
+/** 执行体抛的瞬时故障要**带着类型**过 Temporal 边界：普通 Error 过界后 type 变成 'Error'、
+//  reason 丢掉，判定层只能按 unscanned 停手等人（g4 实咬：`session is waiting for user` 本该
+//  可重试，却停成 unscanned）。已经是 ApplicationFailure 的原样放行。 */
+const TRANSIENT_REASONS = new Set(['lease-held', 'channel-full', 'maintenance', 'launch-uncertain']);
+const asTransientFailure = (error, role) => {
+  if (!error || typeof error.type === 'string') return null; // 已是 ApplicationFailure：分类信息在
+  const reason = error.reason || error.detail?.reason || null;
+  const code = error.code || null;
+  if (code !== 'busy' && code !== 'MirasimUnavailableError' && !TRANSIENT_REASONS.has(reason)) return null;
+  return fail(code === 'MirasimUnavailableError' ? 'MirasimUnavailableError' : 'busy',
+    `${role} runtime transient（${reason || code}）：${String(error.message || error).slice(0, 160)}`, { reason, code });
+};
+
 /** 审查输出解析：只认**恰好一份**含 findings 数组的 JSON。模型先给结论、再回显空模板时，
  *  取「最后一块」会把有阻塞的审查读成通过——宁可 unscanned，不猜。 */
 /** 扫出文本里**所有**能解析的平衡 JSON 对象（含围栏内外、含嵌套）。
@@ -98,7 +111,16 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     }
     return { ok: stopped.every(item => item.ok), stopped };
   };
+  /** 执行体抛的瞬时故障（租约/渠道背压、维护窗、启动未定）在这一层统一转成带类型的可重试失败，
+   *  否则过界后类型丢失、被判定层按 unscanned 停手等人（g4 实咬）。 */
   const runSession = async (task, workdir, prompt, role) => {
+    try {
+      return await runSessionOnce(task, workdir, prompt, role);
+    } catch (error) {
+      throw asTransientFailure(error, role) || error;
+    }
+  };
+  const runSessionOnce = async (task, workdir, prompt, role) => {
     const profile = task.roles[role];
     let started;
     // 起会话前先收本树：上一次失败的启动/未终态的会话会让租约闸判「已有活跃或未知会话」而拒绝，

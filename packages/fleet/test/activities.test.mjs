@@ -178,6 +178,16 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /not parseable/);
     assert.deepEqual(resumes, []);
   });
+  it('执行体的瞬时 busy 要带类型过界（可重试），不能落成 unscanned', async () => {
+    const { activities } = harness({
+      runtime: { startSession: async () => { throw Object.assign(new Error('session is waiting for user'), { code: 'busy', reason: 'lease-held' }); } },
+    });
+    await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), error => error?.type === 'busy');
+  });
+  it('非瞬时错误原样抛，不伪装成可重试', async () => {
+    const { activities } = harness({ runtime: { startSession: async () => { throw new Error('boom'); } } });
+    await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), error => error?.type !== 'busy');
+  });
   it('接手时停不掉会话 → 不接手，报释放未核实', async () => {
     const { activities, calls } = harness({
       git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: H } : { status: 0, out: '' }),
