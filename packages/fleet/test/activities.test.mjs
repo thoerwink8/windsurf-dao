@@ -29,7 +29,7 @@ function harness(overrides = {}) {
     stopSession: async (key) => { calls.push(['stopSession', key]); return { ok: true }; },
     ...overrides.runtime,
   };
-  const gh = async (args) => { calls.push(['gh', ...args]); return overrides.gh ? overrides.gh(args) : { ok: true, out: '{}' }; };
+  const gh = async (args, { role } = {}) => { calls.push(['gh', ...args, role]); return overrides.gh ? overrides.gh(args) : { ok: true, out: '{}' }; };
   const git = async (args, { cwd } = {}) => { calls.push(['git', ...args, cwd]); return overrides.git ? overrides.git(args, cwd) : { status: 0, out: H }; };
   const activities = createActivities({
     runtime, gh, git,
@@ -207,6 +207,16 @@ describe('activities bind the workflow to real systems', () => {
     assert.ok(agents.length > 0, '执行目录一个执行体都没扫到 = 没查成');
     for (const agent of agents) assert.equal(commitPrefixFor(agent), `[${agent}]`, `执行体 ${agent} 必须自动有前缀`);
     assert.equal(commitPrefixFor('bad agent'), null, '不合形状的 agent 不给前缀（不猜）');
+  });
+  it('integrate 的每个 gh 调用都带角色（没角色的会被网关拒，g4 实咬）', async () => {
+    const { activities, calls } = harness({ gh: async (args) => {
+      if (args[1] === 'view') return { ok: true, out: JSON.stringify({ state: 'OPEN', number: 19, headRefOid: H, baseRefName: 'master' }) };
+      return { ok: true, out: '' };
+    } });
+    await activities.integrate(task, { pr: 19, head: H, checkpoint: '/trees/b' }).catch(() => {});
+    const ghCalls = calls.filter(([kind]) => kind === 'gh');
+    assert.ok(ghCalls.length > 0, '一次 gh 调用都没记到 = 没查成');
+    assert.equal(ghCalls.every(call => typeof call[call.length - 1] === 'string' && call[call.length - 1].length > 0), true, 'gh 调用必须带 role');
   });
   it('接手时停不掉会话 → 不接手，报释放未核实', async () => {
     const { activities, calls } = harness({

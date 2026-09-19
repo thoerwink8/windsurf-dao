@@ -337,7 +337,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       if (String(before?.state || '').toUpperCase() !== 'OPEN') throw fail('UNSUPPORTED_CAPABILITY', `pr state ${before?.state}`);
       if (String(before?.headRefOid || '') !== artifact.head) throw fail('UNSUPPORTED_CAPABILITY', 'pr head moved since review');
       if (String(before?.baseRefName || '') !== task.contract.targetBranch) throw fail('UNSUPPORTED_CAPABILITY', 'pr target branch mismatch');
-      await runGh(['pr', 'ready', String(artifact.pr)], { cwd: artifact.checkpoint });
+      await runGh(['pr', 'ready', String(artifact.pr)], { cwd: artifact.checkpoint, role: 'marshal' });
       const merged = await gh(['pr', 'merge', String(artifact.pr), '--squash', '--match-head-commit', artifact.head], { cwd: artifact.checkpoint, role: 'marshal' });
       if (!merged?.ok) throw fail('SERVICE_UNAVAILABLE', `merge failed: ${String(merged?.error || '').slice(0, 200)}`);
       const view = await prView(artifact.pr, 'state,mergeCommit,headRefOid,baseRefName,number', { cwd: artifact.checkpoint });
