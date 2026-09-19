@@ -100,7 +100,7 @@ const DEFAULT_SELF_REVIEW_PROMPT = ({ task, artifact, checks, plan }) => `你是
 {"findings":[{"id":"<短横线小写短名>","severity":"P1|P2|P3","type":"security|data|contract|correctness|perf|maintainability|ui","effort":"small|medium|large","file":"<文件>","line":<行号>,"detail":"<现象 + 期望改法>"}]}
 没有任何问题就输出 {"findings":[]}。这一层是**自审**：只报你有把握的（命名/边界/漏测/取巧），不确定的别报成 P1。`;
 
-export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, selfReviewPrompt = DEFAULT_SELF_REVIEW_PROMPT, closeIssue, deploy, pushEnv = {}, unknownWaitMs = DEFAULT_UNKNOWN_WAIT_MS, unknownWaitRounds = DEFAULT_UNKNOWN_WAIT_ROUNDS, resumeAttempts = 2, sleepFn = sleep, now = () => new Date().toISOString() }) {
+export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, selfReviewPrompt = DEFAULT_SELF_REVIEW_PROMPT, alternatesOf, closeIssue, deploy, pushEnv = {}, unknownWaitMs = DEFAULT_UNKNOWN_WAIT_MS, unknownWaitRounds = DEFAULT_UNKNOWN_WAIT_ROUNDS, resumeAttempts = 2, sleepFn = sleep, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
     const path = projects[repository];
     if (!path) throw fail('UNSUPPORTED_CAPABILITY', `no local checkout mapped for ${repository}`);
@@ -178,14 +178,30 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
   /** 执行体抛的瞬时故障（租约/渠道背压、维护窗、启动未定）在这一层统一转成带类型的可重试失败，
    *  否则过界后类型丢失、被判定层按 unscanned 停手等人（g4 实咬）。 */
   const runSession = async (task, workdir, prompt, role, options = {}) => {
-    try {
-      return await runSessionOnce(task, workdir, prompt, role, options);
-    } catch (error) {
-      throw asTransientFailure(error, role) || error;
+    // T39 阶梯③：换腿。链 = 主腿 + 同 family 候补（`alternatesOf` 给）。
+    // 换腿**只换会话**：树/分支/提交/checkpoint 一律不动（「不弃用已完成内容」）。
+    const chain = [null, ...(Array.isArray(options.alternates) ? options.alternates : [])];
+    for (let i = 0; i < chain.length; i += 1) {
+      const profileId = chain[i];
+      try {
+        const r = await runSessionOnce(task, workdir, prompt, role, { ...options, profileId });
+        // runSessionOnce 已先试过「同会话续跑」；到这里还是上游瞬时错误，才轮到换腿。
+        if (!TRANSIENT_UPSTREAM.test(String(r.view?.error || ''))) {
+          return i > 0 ? { ...r, legSwappedTo: profileId } : r;
+        }
+        if (i === chain.length - 1) return r;
+      } catch (error) {
+        const transient = asTransientFailure(error, role);
+        if (!transient) throw error;
+        if (i === chain.length - 1) throw transient;
+      }
     }
   };
   const runSessionOnce = async (task, workdir, prompt, role, options = {}) => {
-    const profile = task.roles[role];
+    const base = task.roles[role];
+    const profile = options.profileId
+      ? { ...base, profile: options.profileId, family: profileMeta(options.profileId)?.family || base.family }
+      : base;
     const meta = profileMeta(profile.profile);
     let started;
     let resumed = false;
@@ -273,6 +289,14 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       return { agent: typeof meta.agent === 'string' && meta.agent.trim() ? meta.agent.trim() : undefined, family };
     } catch { return null; }
   };
+  /** T39 阶梯③：该角色的**同 family** 候补腿（换腿用）。取不到就空——换腿是增强，不该挡住主腿。 */
+  const alternatesFor = async (task, role) => {
+    if (typeof alternatesOf !== 'function') return [];
+    try {
+      const list = await alternatesOf({ role, primary: task.roles?.[role]?.profile });
+      return Array.isArray(list) ? list : [];
+    } catch { return []; }
+  };
   const prView = async (number, fields, { cwd, role = 'marshal' }) => runGh(['pr', 'view', String(number), '--json', fields], { cwd, role });
   /** issue 标题+正文由活动取回后塞进提示词：会话里跑 gh 是白名单外的命令，会卡在权限提问（g7 实咬）。 */
   const issueBrief = async task => {
@@ -297,7 +321,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       return { repository: task.repository, head: await headOf(tree.path), checkpoint: tree.path, branch };
     },
     async lead(task, { prepared, artifact, feedback, round }) {
-      const { key, status, view } = await runSession(task, prepared.checkpoint, leadPrompt({ task, prepared, artifact, feedback, round, issue: await issueBrief(task) }), "lead");
+      const { key, status, view } = await runSession(task, prepared.checkpoint, leadPrompt({ task, prepared, artifact, feedback, round, issue: await issueBrief(task) }), "lead", { alternates: await alternatesFor(task, 'lead') });
       if (status !== 'done') throw fail(status === 'unknown' ? 'DEADLINE_EXCEEDED' : 'TRANSPORT_CLOSED', `lead session ${status}`);
       const plan = parsePlan(view?.text);
       if (!plan) throw fail('UNSUPPORTED_CAPABILITY', 'lead output not parseable');
@@ -307,10 +331,12 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       let key = null;
       let status = 'done';
       let resumed = false;
+      let legSwappedTo = null;
       const prefix = commitPrefixFor(profileMeta(task.roles.executor.profile)?.agent);
       try {
         // T7：返工轮带上一轮的 sessionKey → 续跑同一会话（上下文还热，修起来便宜）。
-        ({ key, status, resumed } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round, issue: await issueBrief(task), prefix }), "executor", { resumeFrom: feedback?.sessionKey }));
+        ({ key, status, resumed, legSwappedTo } = await runSession(task, prepared.checkpoint, executorPrompt({ task, plan, feedback, round, issue: await issueBrief(task), prefix }), "executor", { resumeFrom: feedback?.sessionKey, alternates: await alternatesFor(task, 'executor') }));
+        legSwappedTo = legSwappedTo || null;
       } catch (error) {
         if (error?.type !== 'WAITING_USER') throw error;
         // 边界画在「交卷」上：工人在等人回答权限，但它可能**已经交卷**（提交就是交卷）。
@@ -346,7 +372,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
         number = Number(String(created.out).trim().split('/').pop());
       }
       if (!Number.isSafeInteger(number) || number <= 0) throw fail('SERVICE_UNAVAILABLE', 'pr number unresolved');
-      return { repository: task.repository, head: finalHead, pr: number, checkpoint: prepared.checkpoint, sessionKey: key, resumed, commitPrefix: { expected: prefix, ...prefixAligned } };
+      return { repository: task.repository, head: finalHead, pr: number, checkpoint: prepared.checkpoint, sessionKey: key, resumed, legSwappedTo, commitPrefix: { expected: prefix, ...prefixAligned } };
     },
     async verify(task, artifact, { waitMs } = {}) {      const budget = Number.isFinite(waitMs) ? Math.max(0, waitMs) : Math.min(task.limits.stepTimeoutSeconds * 600, 20 * 60 * 1000);
       const deadline = Date.now() + budget;
@@ -372,7 +398,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     /** T33：两级审查的第一级——lead 自审。产出与 review 同形但**不参与判定**：
      *  解析不出来/会话没跑完都只当「这一层没捞到」，不挡任务（判定权在异厂审查与代码）。 */
     async selfReview(task, artifact, { checks, plan } = {}) {
-      const { key, status, view } = await runSession(task, artifact.checkpoint, selfReviewPrompt({ task, artifact, checks, plan }), 'lead');
+      const { key, status, view } = await runSession(task, artifact.checkpoint, selfReviewPrompt({ task, artifact, checks, plan }), 'lead', { alternates: await alternatesFor(task, 'lead') });
       if (status !== 'done' || view?.error) return { scanned: false, head: artifact.head, findings: [], sessionKey: key, why: `session ${status}` };
       const parsed = parseFindings(view?.text);
       if (!parsed || !Array.isArray(parsed.findings)) return { scanned: false, head: artifact.head, findings: [], sessionKey: key, why: 'unparseable' };
@@ -388,7 +414,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       if (!gitOk(fetched)) throw fail('SERVICE_UNAVAILABLE', 'review fetch failed');
       const checkedOut = await git(['checkout', '--detach', artifact.head], { cwd: tree.path });
       if (!gitOk(checkedOut)) throw fail('SERVICE_UNAVAILABLE', 'review checkout failed');
-      const { key, status, view } = await runSession(task, tree.path, reviewerPrompt({ task, artifact, checks }), 'reviewer');
+      const { key, status, view } = await runSession(task, tree.path, reviewerPrompt({ task, artifact, checks }), 'reviewer', { alternates: await alternatesFor(task, 'reviewer') });
       if (status !== 'done' || view?.error) {
         // 分开两件事：**上游容量/断流**是瞬时故障（503、限流、超时），判可重试；
         // 会话正常结束但输出解析不了才是「审查没做完」，那要人看提示词，不该重试。

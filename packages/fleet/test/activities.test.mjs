@@ -92,6 +92,32 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 }), /targets develop/);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'gh' && rest[1] === 'create'), false);
   });
+  it('T39：上游容量墙 → 同 family 换腿重起，树/checkpoint 不动', async () => {
+    let n = 0;
+    const started = [];
+    const { activities } = harness({
+      gh: async (args) => (args[0] === 'pr' && args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"master"}]' } : { ok: true, out: '{}' }),
+      runtime: {
+        startSession: async (spec) => { const key = `s${++n}`; started.push(spec.profileId); return { sessionKey: key }; },
+        waitForCompletion: async () => ({ status: 'done' }),
+        readSession: async (key) => (key === 's1' ? { text: '{}', error: '503 capacity exceeded' } : text('{}')),
+        resumeSession: async () => ({ sessionKey: null }),
+      },
+      deps: { alternatesOf: async () => ['exec-alt'] },
+    });
+    const artifact = await activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 });
+    assert.equal(artifact.legSwappedTo, 'exec-alt');
+    assert.deepEqual(started, ['exec-profile', 'exec-alt']);
+  });
+  it('T39：换腿候选取不到 → 不挡主腿（仍走主腿）', async () => {
+    const { activities, calls } = harness({
+      gh: async (args) => (args[0] === 'pr' && args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"master"}]' } : { ok: true, out: '{}' }),
+      deps: { alternatesOf: async () => { throw new Error('leg table unavailable'); } },
+    });
+    const artifact = await activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'dao/issue-17-g1', head: B }, round: 0 });
+    assert.equal(artifact.legSwappedTo, null);
+    assert.equal(calls.filter(([kind]) => kind === 'startSession').length, 1);
+  });
   it('T33：selfReview 产出与 review 同形，但不参与判定（解析不了只当没捞到）', async () => {
     const ok = harness({ runtime: { readSession: async () => text('{"findings":[{"id":"naming","severity":"P2","type":"maintainability","effort":"small","detail":"d"}]}') } });
     const r = await ok.activities.selfReview(task, { checkpoint: '/trees/b', branch: 'b', head: H }, { checks: [], plan: { plan: 'p' } });
