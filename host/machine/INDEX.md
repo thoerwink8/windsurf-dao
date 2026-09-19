@@ -58,6 +58,7 @@
 | D | ~/.dao/temporal | NEW-MACHINE §9 Fleet 节。Temporal 服务端的 SQLite 落点（`temporal.db`）：运行时自建，换机默认不拷（在途任务先收尾）；要续跑在途任务才在停机后单独带 |
 | C | ~/.dao/ledger | NEW-MACHINE §4c。点将台事件账本机落点（不进 git）。新机自动从仓内历史种子；跨机汇聚跑 `node scripts/ledger-sync.mjs --from <ssh 别名>` 按需拉取（幂等，同名跳过；判据 `scripts/lib/ledger-sync.mjs`） |
 | D | ~/.dao/board-archive | 盘面存档本机落点（`dao.mjs board-archive` / `board-reset` 自动建）。清盘前的历史记录，换机不拷 |
+| A | ~/.dao/debt | T32 债册子（P2/P3 审查发现的账，按指纹去重累加计数 + SLA 到期）。`scripts/debt-ledger.mjs` 读写，并入 repo-hygiene 出口。不进 git，换机重生成（历史债丢一次，从后续审查重新累积） |
 | C | ~/.dao/browser-profile | NEW-MACHINE §13c。有头浏览器的 profile，里面是**登录后的会话 cookie**（等同账号凭据）。永不进 git，换机不拷——换了机器人重新登一次即可 |
 | C | ~/.dao/vnc | NEW-MACHINE §13c。VNC 口令（x11vnc 加密存储）+ chromium 日志。永不进 git；删掉 `passwd` 再 start 即换新口令 |
 | D | ~/.dao/mirasim | PR→审官会话登记（`reviewer-<PR>.json`）。**必须在家目录、不能回仓内**：2026-09-06 实咬——原落点 `<仓>/_flow/mirasim` 跟着「谁在跑命令」那棵树走，换棵 worktree 跑同一条 reviewer-create 就把已有审官判成没有，重复起会话烧额度并破掉「一 PR 一审官」。运行时自建，换机不拷 |

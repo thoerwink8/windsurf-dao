@@ -40,6 +40,16 @@ describe('one durable task owns execution, review, rework and closure', () => {
     assert.equal(result.acceptedHead, A);
     assert.deepEqual(f.calls, ['prepare', 'lead', 'execute', 'verify', 'review', 'integrate', 'closeIssue']);
   });
+  it('T32：P2/P3（advisory）随 delivery 走到 closeIssue，不被丢掉', async () => {
+    let seen = null;
+    const f = fixture({
+      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: [{ id: 'minor', severity: 'P2', detail: 'Minor.' }] }),
+      closeIssue: async (_task, delivery) => { seen = delivery; return { repository: 'owner/repo', issue: 17, closed: true }; },
+    });
+    const result = await runFusionTask(task(), f.io);
+    assert.equal(result.state, 'completed');
+    assert.deepEqual(seen.advisory, [{ id: 'minor', severity: 'P2', detail: 'Minor.' }]);
+  });
   it('keeps rework inside the same task and does not integrate an earlier rejected head', async () => {
     let reviews = 0;
     const f = fixture({
