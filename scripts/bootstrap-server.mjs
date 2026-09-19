@@ -32,6 +32,7 @@ const ORCHESTRATION = [
   { name: 'skills-heal', why: 'skills 装载面自愈（含 root 侧那只）' },
   { name: 'execution-usage', why: '用量账本（选型的历史成功率读它）' },
   { name: 'gw-remote-probe', why: '健康表（选型的可用性读它）' },
+  { name: 'repo-hygiene', why: '仓库卫生巡检（未推/未拉 + PR 积压；每天一轮）' },
 ];
 
 /** 旧链路：本仓历史上装过、新链路不再需要的单元（拆干净 = 停 + 禁，不删数据）。 */
@@ -52,6 +53,7 @@ const READBACK = [
   { unit: 'dao-skills-heal.timer', kind: 'timer' },
   { unit: 'dao-execution-usage.timer', kind: 'timer' },
   { unit: 'gw-remote-probe.timer', kind: 'timer' },
+  { unit: 'dao-repo-hygiene.timer', kind: 'timer' },
 ];
 
 const run = (cmd, argv, opts = {}) => spawnSync(cmd, argv, { encoding: 'utf8', windowsHide: true, ...opts });

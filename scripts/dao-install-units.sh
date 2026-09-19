@@ -128,6 +128,12 @@ User=orca
 Group=orca
 WorkingDirectory=/home/orca
 ExecStart=/usr/local/bin/temporal server start-dev --ip 127.0.0.1 --port 7233 --db-filename /home/orca/.dao/temporal/temporal.db --log-level warn
+### dao-repo-hygiene.service
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/repo-hygiene.mjs
+### dao-repo-hygiene.timer
 ### dao-fleet-worker.service
 User=orca
 Group=orca

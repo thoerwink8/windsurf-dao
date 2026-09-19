@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "schedules": [
+    {
+      "id": "3e49ba27-23e0-4e3f-a174-328a651b8be2",
+      "name": "执行一次机制巡检：检查 D:\\frank\\windsurf-dao、D:\\frank\\ai-g…",
+      "prompt": "执行一次机制巡检：检查 D:\\frank\\windsurf-dao、D:\\frank\\ai-gateway-stack 以及服务器运转相关仓库/文档（若路径不存在先查当前工作区可见目录）。只找帅位尚未发现、且有证据支持的流程/控制/证据/安全问题；先查已有观察记录、任务列表和去重标记，避免重复上报。把新发现写入对应仓库的中文观察记录或任务清单，包含时间、证据、复现步骤、影响、建议和验收方式。然后调用 mirasim list_sessions 找到当前帅位会话（优先正在运行的 claude 会话），用 send_session_message 发送一条简明汇报，明确写“已记录路径”和“送达状态”；若发送被占用，说明将于下一个 turn 边界投递，不能谎报已读。不要替帅位直接改代码、推送、部署或关闭会话。",
+      "cron": "0 * * * *",
+      "enabled": false,
+      "agent": "codex",
+      "model": null,
+      "effort": "high",
+      "createdAt": 1788583741494,
+      "updatedAt": 1788593372214
+    },
+    {
+      "id": "45aed99a-f6e5-4cf6-b842-e085a913ef56",
+      "name": "持续推进法国VPS已授权任务闭环。本会话工作区Windows D:/frank/windsur…",
+      "prompt": "持续推进法国VPS已授权任务闭环。本会话工作区Windows D:/frank/windsurf-dao，先读AGENTS.md、CLAUDE.md、host/skills/dispatch/SKILL.md及技能；规范清单D:/frank/windsurf-dao/_tmp/codex-throughput-followup-20260916.md。每轮先读取最新清单，所有VPS命令显式ssh -o BatchMode=yes contabo；远端/srv/projects/windsurf-dao，CLI用runuser -u orca -- node scripts/dao.mjs。先只读now --json、当前PR HEAD/reviews、队列、进程cwd、systemd日志。若commander-act或同任务协调器仍运行，不重复推进同任务，先只读核查。沿用commander-act.timer，不加OS循环。优先公共控制面/复审/清退、安全返工#1308与thoerwink8/ai-gateway-stack#9、#1292/#1288当前HEAD复审；#1301先读最新红项。原树native start前证无健康原工人，带正确--repo和一行绝对框架指针；DAO_REAL_EXECUTOR=1只给启动不传测试。审官走review-pending-drain/reviewer-create，核HEAD/实际进程及qualified/unqualified登记。树存在不等于会话活，未知名单不等于空；不改租约/cleanupVerified，不按年龄/共享runtime PID杀任务；启动失败明确报告，有界重试。#1299源码同步不等于事件桥进程重载，须部署和故障演练。不盲加并发/删历史/补假树/改vendor/买资源，工人审官测试均计负载。用户A授权安全返工清退和正常收口；旧临时push例外已随控制面恢复结束，正常push，不force不master push不永久no-verify。独立审查不可省，不合零review/旧批准/当前红；核CI/权限/HEAD并match-head-commit。跨仓#9显式manual、框架根/srv/projects/windsurf-dao，未批准不升级。Issue写只用issue-gateway，PR写gh-as marshal。新断链先查同因单挂回并定优先级依赖，普通安全决策直接做，规则/花钱/跨范围不可逆才问。进展后apply_patch修订清单当前表，再串行node _tmp/plan-sync/sync-plan.mjs --apply同步#1174且回读验证；失败先核远端不盲重试。若无法访问本地文件报告同步阻塞。报告真正完成/启动/阻塞与证据时间；不能宣称未验证的自动执行已成功。",
+      "cron": "*/20 * * * *",
+      "enabled": false,
+      "agent": "claude",
+      "model": "claude-opus-5[1m]",
+      "effort": "high",
+      "createdAt": 1789522679661,
+      "updatedAt": 1789681698700
+    },
+    {
+      "id": "bb1d9eef-c960-40fd-8a60-34d558a50e1e",
+      "name": "红项分级验收监测",
+      "prompt": "监测法国 Contabo VPS 上「红项分级（P1挡合/P2落单/P3不追）+ 熔断二选一」这条链的落地，直至符合预期。本任务是**只读监测 + 断链修复派工**，不许改判绿口径本身。\n\n环境：\n- `ssh -o BatchMode=yes contabo`（root）；生产仓 `/srv/projects/windsurf-dao`；操作走 `runuser -u orca -- ...`。\n- 本机 Windows，工作目录 `D:\\frank\\windsurf-dao`。\n\n每轮按顺序核这五项，逐项记录实测值，不许凭上一轮印象：\n\n1. **PR #1324（规则）**：`runuser -u orca -- node scripts/gh-as.mjs marshal -- pr view 1324 --repo thoerwink8/windsurf-dao --json state,reviews,mergeable,headRefOid`\n   - 若已 APPROVED 且批准钉在当前 head → 按现有合并闸合入（`--squash --match-head-commit <head>`）。\n   - 若 CHANGES_REQUESTED → 读判定正文，**按新的 P1/P2 分档核对审官是否真给了级别**。若审官没标级别（说明规则还没生效），如实报告，不许自己替它分档。\n2. **PR #1322（#1227 的 review_rounds_max 实现）**：核它的超限动作是接到了「改判/拆单」二选一，还是仍停在「停手上报」。\n   - 停在停手上报 = 本轮主要断链，在该 issue #1227 留评论说明缺什么（走 `scripts/issue-gateway.mjs`，带 `--host codex --idempotency-key`）。\n3. **接线闸是否真跑**：在 master（或 #1324 合入后）跑 `node scripts/dao-check.mjs 2>&1 | grep -E \"红项分级|dao check:\"`，确认那一条不是静默跳过。\n4. **验收数字（唯一硬指标）**：统计过去 24 小时内每棵 worktree 被起了几次会话，算「重复起占比」。\n   命令形状（在 `~/.dao/execution/sessions/` 下遍历 json，按 `workdir` 聚合计数与总时长）。\n   基线：2026-09-16 17:40 实测 **351 会话小时中 243 小时（69%）是重复起**。目标降到 **100 小时以下**。\n   - 数字没降就如实报「未达预期」，并说明观察到卡在哪一层——不许把它写成「正在改善」。\n5. **#885 判别实验**：它已 8 轮，是熔断规则的试金石。核它这轮是产出「改判」/「拆单」，还是又一条「已停手」。\n\n汇报纪律：\n- 每轮把结果追加到 `D:\\frank\\windsurf-dao\\_tmp\\codex-throughput-followup-20260916.md`，然后跑\n  `node _tmp/plan-sync/sync-plan.mjs --apply` 同步到 GitHub #1174，并回读核对。\n- 无变化就一句话带过，别复述整份清单。\n- 发现断链：能自己修的直接修（工作树 + PR + 判绿），涉及改规则/花钱/删数据的停下来报用户。\n- 不许把「审官已创建」「PR 已开」当完成；只认「判定落地 + 合入 + 数字变化」。\n\n先做第一轮，然后每 30 分钟重复。",
+      "cron": "23,53 * * * *",
+      "enabled": false,
+      "agent": "claude",
+      "model": null,
+      "effort": null,
+      "createdAt": 1789558630276,
+      "updatedAt": 1789558630276
+    },
+    {
+      "id": "4f3d3115-7a49-4e87-8702-30a75b753559",
+      "name": "用户已授权持续推进 windsurf-dao 盘面、排查断链、开单并推进；本任务每30分钟巡检…",
+      "prompt": "用户已授权持续推进 windsurf-dao 盘面、排查断链、开单并推进；本任务每30分钟巡检一次。工作仓 D:/frank/windsurf-dao (Windows PowerShell)。先完整读 AGENTS.md、CLAUDE.md、host/skills/dispatch/SKILL.md；文档/Issue证据用简体中文。法国VPS=SSH别名contabo-jump，通过myserver跳板；日常操作必须 ssh orca@contabo-jump，仓 /srv/projects/windsurf-dao（/home/orca/windsurf-dao为链接）。不要向用户暴露凭据。可用root SSH只读journal/systemctl，但不要root跑git、测试或服务用户的脚本。\n本轮先做有界只读核验：GitHub开放PR/Issue与head/CI/reviews、法国VPS主树git status与origin、commander-act.service/timer和dao-sync.timer、最新/home/orca/.dao/commander/situation-*.json选取at/sessions/admission/reviewPending/healthRedModels（不要倾倒完整账本）。需要会话状态用dao.mjs session-read，从/home/orca/.dao/mirasim/reviewer-<PR>.json取sessionKey。最近基线（2026-09-18凌晨，仅作线索需重查）：PR1377测试沙盒隔离与TAP证据、PR1367 fence诊断都待复审；PR1388是draft观察稿不该自动派审；Issue1344是body-only返工同head不触发复审的生产/消费侧缺口；Issue1362管draft误派审；Issue1384管双命名死票清理；Issue1386管turn归属与断流熔断；commander两轮sessions名单ETIMEDOUT，而单会话快照可读。任何历史结论不能直接复用。\n推进边界：有真实P1先组织既有工人返工/补正文证据，只改正文不为触发复审而force-push或空提交；在役工人/审官仍工作就不重复派、不移动其worktree。调用现有dao dispatch/review-pending-drain等正式入口，不手改账本/票/健康表，不用--force绕容量/同厂/审查闸，不重启正在承载活会话的mirasim，不杀不明会话。要进git的修复在独立worktree且按仓规派工，先draft PR，验dao-check与handoff，跨厂独立审查；合并只有批准匹配最新head、CI绿、merge-policy允许且无冲突，走marshal正式入口；关Issue只走close-issues脚本。不能把accepted/queued/进程启动等同开工，更不能当完成。未知/超时标没查成，不当空列表。\n开单前查git log --all --grep=chain:和所有状态相关Issue；同起因复用已有统领单（CLOSED也先核已有PR）。Issue所有写只走node scripts/issue-gateway.mjs --host codex及稳定idempotency-key，正文首行起因slug，附真实时间/head/复现/影响/有限验收/边界；每轮至多新开1张已取证且本批能做的技术修复单。已有单有新证据才评论，同样状态不刷屏。未获授权的模型路由/预算/破坏性处置/协作制度变化只报告，不擅改。每轮最多推进2个现有对象，不主动运行并发全量dao-check压生产。\n返回简短中文：本轮真正完成的动作与GitHub链接、仍卡住的原因、下一步。只有状态变化/新断链/需要用户决策时重点通知；没有变化如实一行，不保证未完成的事已落地。不要创建额外循环、睡眠监视或另一个同名任务。",
+      "cron": "7,37 * * * *",
+      "enabled": false,
+      "agent": "claude",
+      "model": "claude-opus-5[1m]",
+      "effort": "high",
+      "createdAt": 1789678258873,
+      "updatedAt": 1789738905985
+    },
+    {
+      "id": "f53cf070-ecd9-49b1-88c4-144cdb06b008",
+      "name": "windsurf-dao 断链巡检与推进",
+      "prompt": "持续推进 windsurf-dao，无人值守。用户2026-09-18要求排查断链、按起因开单并推进，另点名PR1322，希望根治master合入后其它PR冲突/停摆。工作仓 D:/frank/windsurf-dao (PowerShell)；先完整读 AGENTS.md、CLAUDE.md、host/skills/dispatch/SKILL.md。查证优先利用现有 dao now / journal / GitHub结构化JSON，所有写动作按仓规则，不以历史聊天状态当事实。\n服务器：ssh orca@contabo-jump（ProxyJump myserver），仓 /srv/projects/windsurf-dao；root SSH仅只读journal/systemctl，不root跑git/测试。真实派工用正式 dao.mjs dispatch 与生产显式环境 DAO_REAL_EXECUTOR=1（仅生产命令，测试必须fake），仍遵守容量/模型健康/跨厂/身份闸。不得--force、不改模型路由、不手写票/租约/健康表、不重启承载活任务的服务，不强推/移动活工人脚下分支。\n最重要的安全发现：Issue1400已经立单且派工。在其修复上线验收前，绝不在共享主树或父目录运行 worker-done；它当前按process.cwd前缀停止会话，会扫到其它嵌套worktree，且stopped.ok=false仍可能顶层ok:true。补文书优先marshal pr comment（首行返工完成）并复用已在役审官；确需worker-done，只能先从PR反查精确的工人worktree，核分支/HEAD/归属与无其它活任务，再在该worktree执行。不能把评论已发/已入队当闭环完成；核stopped、实际会话、产物。\n最近已证状态（05:20左右，仅作线索每轮必重查）：PR1367已APPROVED并MERGED，落4ac27975；PR1377沙盒隔离+TAP证据已补完整，法国VPS故意assert(2,0)使dao-check唯一1红，移出后281绿，HEAD8075f6f6未改，现已交待审票1377.json；旧审官通过正式session-stop已清退。PR1322旧73d04bf与master唯一冲突是scripts/lib/spawn-budget.mjs公共预算及长字符串；工人以46033d928合master保留两笔预算160->161，目前MERGEABLE/CLEAN、CI绿，协调者补了同HEAD反向样本/回流/3通handoff到正文及评论5721431594；审官登记codex:9ddfedfa-b54a-438a-8feb-66a6f4f39eaa。不要再为单纯落后master变基。\n已正式派工待核产物：Issue1399 公共spawn预算账引发无关PR冲突（grok:9e7b3ca5-9994-48b7-9784-90fcc422959a，树/home/orca/mirasim-worktrees/windsurf-dao/dao-1399）；Issue1400 worker-done清退范围与部分失败（grok:d30dc55e-6242-46be-b06c-36ed3c8a6276，树dao-1400）。继续读现场登记，不因旧sessionKey失效就重复派。Issue1397会话枚举总预算不闭合已取证/已消歧带标，尚需确认工人；Issue1344管body-only同head不复审，Issue1362管draft误审，Issue1384管双文件名死票。#1386熔断修复已由PR1398合e67ce324，05:12快照healthRedModels=[]、sessions.scanned=true，但需重新核，不能当永久恢复。\n每轮检查开放PR的head/mergeable/reviews/CI与真实会话、commander-act及dao-sync状态、主树干净/领先/落后、最新situation只选必要字段（禁止整份账本灌输出）。只落后master不等于冲突；真CONFLICTING才由合法工人在独立树维修，保留双方语义；每次代码head变化必须按当前规范审查，但纯正文不能靠空提交/变基骗触发。已绿但冲突仍停摆时查commander的readyToLand提前return与dock unknown提前返回，并搜索已存在对应单，别重复开。\n开单前搜索全部状态同因Issue及git log --all --grep=chain:。Issue写只经scripts/issue-gateway.mjs --host codex+稳定idempotency-key，首行起因slug，附实证/验收/边界；每轮最多新开1张确证且能排进本批的单，已有单有新证据才评论。优先把1399/1400及1322/1377做完，避免派工洪峰；最多推进2个对象。代码修复必须独立worktree、draft PR、目标测试/dao-check/handoff、负控、跨厂独立review；主树不提交。不合reviews=0、不合旧head绿票、不绕CI、不把unscanned当空列表。合并只在当前规范允许、批准匹配head、CI绿且无冲突时走marshal；关单只走close-issues脚本，1358要核实际沙盒修复1377已合，不能只凭诊断1367合了就关。\n汇报简短中文：真正做成的动作+链接、仍卡点、下一步。无变化一行即可，有新断链/需新权限再报，不刷同样评论。不得创建其它循环/定时器/同名任务。本任务每小时07和37分运行；用户可在Mirasim计划任务面板停用。",
+      "cron": "7,37 * * * *",
+      "enabled": false,
+      "agent": "codex",
+      "model": null,
+      "effort": null,
+      "createdAt": 1789680249582,
+      "updatedAt": 1789738908381
+    }
+  ]
+}
