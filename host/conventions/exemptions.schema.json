@@ -1,0 +1,23 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "约定豁免段",
+  "_note": "子仓 `AGENTS.md` 的 `## 豁免` 段解析后的形态（解析器：kit/conventions-core.mjs 的 parseExemptions）。**reason 必填**——没有理由的条目由判据直接判红（不可协商层 C2：抑制必须带理由）。",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["rule", "reason"],
+    "additionalProperties": false,
+    "properties": {
+      "rule": {
+        "type": "string",
+        "pattern": "^C[1-9][0-9]*$",
+        "description": "被豁免的不可协商层编号，如 C7"
+      },
+      "reason": {
+        "type": "string",
+        "minLength": 4,
+        "description": "为什么这条在本仓不适用——不是「先关掉」"
+      }
+    }
+  }
+}
