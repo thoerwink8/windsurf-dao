@@ -66,6 +66,18 @@ test('冷却已到期的 open 不再拦（时钟可比时按未到判）', async
   assert.equal(result.recommended, 'leg-a');
 });
 
+test('half-open 的探针预算用尽也直接拦（与 provider-breaker 的 inspectAvailability 同口径）', async () => {
+  const { chooseLeg } = await MOD;
+  const probeKeyOf = p => `native:${p.provider}`;
+  const used = chooseLeg({
+    role: 'executor', probeKeyOf,
+    breaker: { targets: { 'native:prov-a': { state: 'half-open', halfOpenUsed: 1 } } },
+    profiles: [profile({ id: 'leg-used', provider: 'prov-a' }), profile({ id: 'leg-clean', provider: 'prov-b' })],
+  });
+  assert.equal(used.recommended, 'leg-clean');
+  assert.equal(used.candidates.find(item => item.id === 'leg-used').eliminated.code, 'breaker-open');
+});
+
 test('并发满员只后置不淘汰（背压是瞬时的，票留队列）', async () => {
   const { chooseLeg } = await MOD;
   const result = chooseLeg({
@@ -153,9 +165,9 @@ test('全部淘汰时 recommended 为 null，列表仍完整带原因', async ()
 test('未注入数据源时给出 note，不冒充查过', async () => {
   const { chooseLeg } = await MOD;
   const result = chooseLeg({ role: 'executor', profiles: [profile()] });
-  assert.equal(result.notes.length, 4);
+  assert.equal(result.notes.length, 3);
   assert.match(result.notes.join('\n'), /健康表没查成/);
-  assert.match(result.notes.join('\n'), /熔断表缺失/);
+  assert.match(result.notes.join('\n'), /并发数据缺失/);
 });
 
 test('renderLegTable 同时出现推荐与淘汰原因', async () => {

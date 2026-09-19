@@ -114,22 +114,30 @@ async function resolveRoles(args) {
   if (selection !== 'auto' && selection !== 'ask') throw new Error('--selection 只能是 auto 或 ask');
   const { chooseLeg, renderLegTable, loadLegChoiceData } = await import('../../../scripts/lib/leg-choice.mjs');
   const data = loadLegChoiceData({});
-  const pick = (role, excludeFamilies = []) => {
+  const tableOf = (role, excludeFamilies = []) => {
     const result = chooseLeg({ profiles: data.profiles, role, excludeFamilies, health: data.health, breaker: data.breaker, headroom: data.headroom, history: data.history, now: Date.now() });
     result.notes = [...data.notes, ...result.notes];
-    if (!result.recommended) throw new Error(`${role} 没有可用候选：\n${renderLegTable(result)}`);
     return result;
   };
-  const lead = explicit.lead || pick('lead').recommended;
-  const executor = explicit.executor || pick('executor').recommended;
-  const executorFamily = profileFamily(executor);
-  const reviewer = explicit.reviewer || pick('reviewer', executorFamily ? [executorFamily] : []).recommended;
-  if (selection === 'ask' && !(explicit.lead && explicit.executor && explicit.reviewer)) {
-    const tables = ['lead', 'executor', 'reviewer'].map(role => renderLegTable(chooseLeg({ profiles: data.profiles, role, excludeFamilies: role === 'reviewer' && executorFamily ? [executorFamily] : [], health: data.health, breaker: data.breaker, headroom: data.headroom, history: data.history, now: Date.now() })));
+  if (selection === 'ask') {
+    // ask 先打印三张表（含淘汰项与注）再退出：**不能先 pick**——任一角色没有可用候选就会抛错，
+    // 人反而看不到表（复核实咬）。只有 auto 才允许 pick 失败即报错。
+    const executorProfile = explicit.executor || tableOf('executor').recommended;
+    const executorFamily = executorProfile ? profileFamily(executorProfile) : null;
+    const tables = ['lead', 'executor', 'reviewer'].map(role => renderLegTable(tableOf(role, role === 'reviewer' && executorFamily ? [executorFamily] : [])));
     process.stdout.write(`${tables.join('\n\n')}\n\n候选如上（ask 模式不自动开工）。选定后带 --lead-profile/--executor-profile/--reviewer-profile 重新 start。\n`);
     process.exitCode = 3;
     return null;
   }
+  const pick = (role, excludeFamilies = []) => {
+    const result = tableOf(role, excludeFamilies);
+    if (!result.recommended) throw new Error(`${role} 没有可用候选：\n${renderLegTable(result)}`);
+    return result.recommended;
+  };
+  const lead = explicit.lead || pick('lead');
+  const executor = explicit.executor || pick('executor');
+  const executorFamily = profileFamily(executor);
+  const reviewer = explicit.reviewer || pick('reviewer', executorFamily ? [executorFamily] : []);
   process.stdout.write(`[fleet] 选腿：lead=${lead} executor=${executor} reviewer=${reviewer}\n`);
   return { lead, executor, reviewer };
 }

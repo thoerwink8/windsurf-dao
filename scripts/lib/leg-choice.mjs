@@ -74,8 +74,12 @@ function availabilityOf(profile, { health, breaker, headroom, probeKeyOf, now })
   const breakerEntry = probeKey ? breaker?.targets?.[probeKey] : null;
   const breakerState = breakerEntry?.state ? String(breakerEntry.state) : null;
   const cooldownUntil = breakerEntry?.cooldownUntil ? Date.parse(breakerEntry.cooldownUntil) : null;
-  // open 且冷却未到（或没有时钟可比）→ 直接拦（provider-health 的熔断语义：区别于健康红只后置）。
-  const breakerOpen = breakerState === 'open' && !(Number.isFinite(cooldownUntil) && Number.isFinite(now) && cooldownUntil <= now);
+  const cooldownPassed = Number.isFinite(cooldownUntil) && Number.isFinite(now) && cooldownUntil <= now;
+  const halfOpenUsed = Number(breakerEntry?.halfOpenUsed) || 0;
+  // open 且冷却未到（或没有时钟可比）→ 直接拦；half-open 的探针预算用尽同样直接拦——
+  // 判据与 provider-breaker 的 inspectAvailability 一致（「half-open 一针已用」= 不可用），
+  // 否则 auto 会推荐一条起会话时必然被拦的腿（复核实咬）。
+  const breakerOpen = (breakerState === 'open' && !cooldownPassed) || (breakerState === 'half-open' && halfOpenUsed >= 1);
   const breakerRank = breakerOpen ? 3 : breakerState === 'half-open' ? 1 : 0;
   const healthEntry = probeKey ? health?.targets?.[probeKey] : null;
   const healthState = healthEntry?.state ? String(healthEntry.state) : null;
@@ -135,7 +139,6 @@ export function chooseLeg({
   const excludedIds = new Set(excludeIds.map(value => String(value)));
   const notes = [];
   if (health === null) notes.push('健康表没查成（unknown 不拦，只后置）');
-  if (breaker === null) notes.push('熔断表缺失（视为无熔断）');
   if (headroom === null) notes.push('并发数据缺失（上限按未登记处理）');
   if (history === null) notes.push('历史数据缺失（成功率按未知处理）');
 
@@ -276,7 +279,7 @@ export function loadLegChoiceData({ home = os.homedir(), root = null, now = Date
       sessionsScanned += 1;
       const state = String(record.state || '');
       const observed = String(record.observedState || '');
-      if (['pending', 'running', 'streaming', 'active', 'waiting_user'].includes(state)) {
+      if (['pending', 'running', 'streaming', 'active', 'waiting_user', 'waiting', 'waiting_permission'].includes(state)) {
         headroom[id] = { inFlight: (headroom[id]?.inFlight || 0) + 1, cap: null };
       }
       const bucket = history[id] || { done: 0, failed: 0 };
