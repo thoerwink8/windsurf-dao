@@ -12,6 +12,15 @@ BOT_PATHS='^(scripts/feishu-triage\.mjs|scripts/lib/feishu-triage-core\.mjs|scri
 
 g() { git -C "$REPO" "$@"; }   # 本进程就是 orca，不再需要 sudo -u
 
+# 属主自检（2026-09-19 病根）：.git 里混进 root 属主的文件时，本进程（orca）写不进去 ⇒
+# 「Permission denied」⇒ 静默 drift（checkout 停在旧提交没人发现；本次 542 个文件、停在 #1515）。
+# 带修法大声失败：宁可停住，也不静默落后。
+offender=$(find "$REPO/.git" ! -user orca -print -quit)
+if [ -n "$offender" ]; then
+  echo "属主错乱：$offender 不是 orca（别用 root 在 orca 的仓里跑 git）；修：sudo chown -R orca:orca $REPO" >&2
+  exit 1
+fi
+
 # 仓内单元变更后推到 /etc。钩子没装 / sudoers 没放行时只打日志，不挡同步——
 # 报警面在 dao-check ㊳（活单元对不上就红）。每次都跑：钩子是后装的，
 # 只在「本轮 diff 命中 systemd」时跑会把已经合进去、还没上机的那一次漏掉。
