@@ -37,23 +37,38 @@ function argsOf(argv) {
       const key = token.slice(2);
       const next = argv[i + 1];
       if (next === undefined || next.startsWith('--')) out[key] = true;
-      else { out[key] = next; i += 1; }
+      else {
+        out[key] = next;
+        i += 1;
+      }
     } else out._.push(token);
   }
   return out;
 }
 
 function run(cmd, argv, { cwd, env, input } = {}) {
-  return new Promise((resolveRun) => {
+  return new Promise(resolveRun => {
     let child;
-    try { child = spawn(cmd, argv, { cwd, env: env ? { ...process.env, ...env } : process.env, windowsHide: true }); }
-    catch (error) { resolveRun({ ok: false, error: String(error.message || error) }); return; }
+    try {
+      child = spawn(cmd, argv, { cwd, env: env ? { ...process.env, ...env } : process.env, windowsHide: true });
+    } catch (error) {
+      resolveRun({ ok: false, error: String(error.message || error) });
+      return;
+    }
     let out = '';
     let err = '';
-    child.stdout.on('data', chunk => { out += chunk; });
-    child.stderr.on('data', chunk => { err += chunk; });
+    child.stdout.on('data', chunk => {
+      out += chunk;
+    });
+    child.stderr.on('data', chunk => {
+      err += chunk;
+    });
     child.on('error', error => resolveRun({ ok: false, error: String(error.message || error) }));
-    child.on('close', code => resolveRun(code === 0 ? { ok: true, out } : { ok: false, status: code, error: (err || out).trim().slice(0, 400), out }));
+    child.on('close', code =>
+      resolveRun(
+        code === 0 ? { ok: true, out } : { ok: false, status: code, error: (err || out).trim().slice(0, 400), out },
+      ),
+    );
     if (input != null) child.stdin.end(input);
   });
 }
@@ -61,7 +76,8 @@ function run(cmd, argv, { cwd, env, input } = {}) {
 async function ghAs(argv, { cwd, role } = {}) {
   // 参数顺序写反过一次（`ghAs('marshal', [...])`）：那样 role 是 undefined，网关一律拒，
   // 而调用方只看到「没角色的调用」——真因被盖住。形状不对就大声报，别让它静默。
-  if (typeof argv === 'string' || !Array.isArray(argv)) throw new Error('ghAs 用法错误：第一个参数必须是参数数组，角色放 options.role');
+  if (typeof argv === 'string' || !Array.isArray(argv))
+    throw new Error('ghAs 用法错误：第一个参数必须是参数数组，角色放 options.role');
   if (!role) return { ok: false, error: 'gh call without role' };
   return run(process.execPath, [join(REPO_ROOT, 'scripts', 'gh-as.mjs'), role, '--', ...argv], { cwd });
 }
@@ -69,7 +85,9 @@ async function ghAs(argv, { cwd, role } = {}) {
 /** 判定层读 git 的退出码（status===0）；run() 只给 ok。适配在这一层做，不改判定语义。 */
 async function gitRun(argv, { cwd, env, input } = {}) {
   const result = await run('git', argv, { cwd, env, input });
-  return result.ok ? { status: 0, out: result.out || '', err: '' } : { status: result.status ?? 1, out: result.out || '', err: result.error || '' };
+  return result.ok
+    ? { status: 0, out: result.out || '', err: '' }
+    : { status: result.status ?? 1, out: result.out || '', err: result.error || '' };
 }
 
 function profileFamily(profileId) {
@@ -94,7 +112,14 @@ function specFromArgs(args, roles) {
     repository: repo,
     issue,
     generation: Number(args.generation || 1),
-    contract: { requiredChecks: String(args.checks || 'check').split(',').map(x => x.trim()).filter(Boolean), deploymentRequired: args.deploy === true, targetBranch: String(args.base || 'master') },
+    contract: {
+      requiredChecks: String(args.checks || 'check')
+        .split(',')
+        .map(x => x.trim())
+        .filter(Boolean),
+      deploymentRequired: args.deploy === true,
+      targetBranch: String(args.base || 'master'),
+    },
     limits: { reviewRounds: Number(args.rounds || 3), stepTimeoutSeconds: Number(args.timeout || 1800) },
     roles: {
       lead: { profile: roles.lead, family: profileFamily(roles.lead), accountPool: 'default' },
@@ -119,7 +144,16 @@ async function resolveRoles(args) {
   const { chooseLeg, renderLegTable, loadLegChoiceData } = await import('../../../scripts/lib/leg-choice.mjs');
   const data = loadLegChoiceData({});
   const tableOf = (role, excludeFamilies = []) => {
-    const result = chooseLeg({ profiles: data.profiles, role, excludeFamilies, health: data.health, breaker: data.breaker, headroom: data.headroom, history: data.history, now: Date.now() });
+    const result = chooseLeg({
+      profiles: data.profiles,
+      role,
+      excludeFamilies,
+      health: data.health,
+      breaker: data.breaker,
+      headroom: data.headroom,
+      history: data.history,
+      now: Date.now(),
+    });
     result.notes = [...data.notes, ...result.notes];
     return result;
   };
@@ -128,8 +162,12 @@ async function resolveRoles(args) {
     // 人反而看不到表（复核实咬）。只有 auto 才允许 pick 失败即报错。
     const executorProfile = explicit.executor || tableOf('executor').recommended;
     const executorFamily = executorProfile ? profileFamily(executorProfile) : null;
-    const tables = ['lead', 'executor', 'reviewer'].map(role => renderLegTable(tableOf(role, role === 'reviewer' && executorFamily ? [executorFamily] : [])));
-    process.stdout.write(`${tables.join('\n\n')}\n\n候选如上（ask 模式不自动开工）。选定后带 --lead-profile/--executor-profile/--reviewer-profile 重新 start。\n`);
+    const tables = ['lead', 'executor', 'reviewer'].map(role =>
+      renderLegTable(tableOf(role, role === 'reviewer' && executorFamily ? [executorFamily] : [])),
+    );
+    process.stdout.write(
+      `${tables.join('\n\n')}\n\n候选如上（ask 模式不自动开工）。选定后带 --lead-profile/--executor-profile/--reviewer-profile 重新 start。\n`,
+    );
     process.exitCode = 3;
     return null;
   }
@@ -146,23 +184,41 @@ async function resolveRoles(args) {
   return { lead, executor, reviewer };
 }
 
-const reviewerPrompt = ({ task, artifact, checks }) => `你是本任务的独立审查者，只审 ${task.repository} 的 PR #${artifact.pr}，绑定 HEAD ${artifact.head}。工作目录已检出该 HEAD，不要改代码、不要提交、不要推送。
+const reviewerPrompt = ({
+  task,
+  artifact,
+  checks,
+}) => `你是本任务的独立审查者，只审 ${task.repository} 的 PR #${artifact.pr}，绑定 HEAD ${artifact.head}。工作目录已检出该 HEAD，不要改代码、不要提交、不要推送。
 必查项：契约要求的检查在 ${artifact.head} 上全绿（当前证据：${JSON.stringify(checks)}，由系统取回，不必自己再查）。不要跑 gh 或联网——需要的外部事实系统已经给你了。
 请给出你的发现，只输出一个 JSON 对象，不要输出其它文字：
 {"findings":[{"id":"<短横线小写短名>","severity":"P1|P2|P3","detail":"<文件:行号 + 现象 + 期望改法>"}]}
 没有任何问题时输出 {"findings":[]}。P1 只用于会导致错误结果、数据丢失、安全或协议破坏的问题；风格与建议用 P3。`;
 
-const leadPrompt = ({ task, prepared, artifact, feedback, round, issue }) => `你是本任务的主脑（lead）。任务：${task.repository} 的 issue #${task.issue}（第 ${round + 1} 轮）。工作目录 ${prepared.checkpoint}（该 issue 的专用分支）。
+const leadPrompt = ({
+  task,
+  prepared,
+  artifact,
+  feedback,
+  round,
+  issue,
+}) => `你是本任务的主脑（lead）。任务：${task.repository} 的 issue #${task.issue}（第 ${round + 1} 轮）。工作目录 ${prepared.checkpoint}（该 issue 的专用分支）。
 ${issue}
 ${feedback ? `上一轮审查阻塞项：${JSON.stringify(feedback.blocking)}\n本轮必须只针对这些阻塞项收敛。` : '这是第一轮：先读清 issue 与相关代码，给出最小、可验证的实施计划。'}
 ${artifact ? `当前已有实现提交 ${artifact.head}。` : ''}
 只输出一个 JSON 对象：{"plan":"<分步计划：改哪些文件、跑哪些命令、成功判据是什么>"}。`;
 
-const executorPrompt = ({ task, plan, feedback, round, issue, prefix }) => `你是本任务的执行者。任务：${task.repository} 的 issue #${task.issue}（第 ${round + 1} 轮）。工作目录就是任务分支，直接在这里改代码。
+const executorPrompt = ({
+  task,
+  plan,
+  feedback,
+  round,
+  issue,
+  prefix,
+}) => `你是本任务的执行者。任务：${task.repository} 的 issue #${task.issue}（第 ${round + 1} 轮）。工作目录就是任务分支，直接在这里改代码。
 ${issue}
 计划：${plan.plan}
 ${feedback ? `上一轮审查阻塞项（必须逐条解决）：${JSON.stringify(feedback.blocking)}` : ''}
-要求：改动尽量小（能改 1 个文件就别动 3 个）；提交作者身份系统已经设好，不用管；**提交信息必须以 ${prefix || '[<执行体>]'} 开头**（前缀由执行档决定，系统在 push 前会强制对齐）；完成后必须 git add + git commit。**提交完就停手**：不要再跑任何命令、不要推送、不要开 PR——推送、开 PR、跑检查、合并、关单全由系统接手。若确实要先验证，只用 npm test（依赖系统已按 lock 装好），不要 npm ci / npm install，不要跑全量自检。**不要推送、不要开 PR、不要合并**——推送与开 PR 由系统做。最后用一句话说明你改了什么、跑了什么。`;
+要求：改动尽量小（能改 1 个文件就别动 3 个）；提交作者身份系统已经设好，不用管；**提交信息必须以 ${prefix || '[<执行体>]'} 开头**（前缀由执行档决定，系统在 push 前会强制对齐）；提交前先跑 node scripts/dao-fix.mjs --changed（机械项：行尾/尾随空白/末行换行，当场消掉，别留给审查者），然后 git add + git commit。**提交完就停手**：不要再跑任何命令、不要推送、不要开 PR——推送、开 PR、跑检查、合并、关单全由系统接手。若确实要先验证，只用 npm test（依赖系统已按 lock 装好），不要 npm ci / npm install，不要跑全量自检。**不要推送、不要开 PR、不要合并**——推送与开 PR 由系统做。最后用一句话说明你改了什么、跑了什么。`;
 
 async function makeActivities() {
   const { createExecutionRuntime } = await import('../../../scripts/lib/execution-runtime.mjs');
@@ -170,8 +226,26 @@ async function makeActivities() {
   const runtime = createExecutionRuntime();
   const closeIssue = async ({ task, delivery }) => {
     const comment = `fleet：任务 ${task.id} 完成——PR #${delivery.pr} 已合并（${delivery.mergeCommit}），检查全绿、独立审查通过。`;
-    const closed = await run(process.execPath, [join(REPO_ROOT, 'scripts', 'issue-gateway.mjs'), 'close', '--repo', task.repository, '--issue', String(task.issue), '--reason', 'completed', '--comment', comment, '--host', 'fleet', '--idempotency-key', `${task.id}-close`]);
-    if (!closed.ok) throw Object.assign(new Error(`issue close failed: ${String(closed.error || '').slice(0, 200)}`), { code: 'SERVICE_UNAVAILABLE' });
+    const closed = await run(process.execPath, [
+      join(REPO_ROOT, 'scripts', 'issue-gateway.mjs'),
+      'close',
+      '--repo',
+      task.repository,
+      '--issue',
+      String(task.issue),
+      '--reason',
+      'completed',
+      '--comment',
+      comment,
+      '--host',
+      'fleet',
+      '--idempotency-key',
+      `${task.id}-close`,
+    ]);
+    if (!closed.ok)
+      throw Object.assign(new Error(`issue close failed: ${String(closed.error || '').slice(0, 200)}`), {
+        code: 'SERVICE_UNAVAILABLE',
+      });
     const view = await ghAs(['issue', 'view', String(task.issue), '--json', 'state'], { role: 'marshal' });
     if (!view.ok) throw Object.assign(new Error('issue close unverified'), { code: 'SERVICE_UNAVAILABLE' });
     const state = JSON.parse(view.out || '{}').state;
@@ -182,8 +256,17 @@ async function makeActivities() {
     projects: PROJECTS,
     gh: ghAs,
     git: gitRun,
-    installDeps: async workdir => { const target = join(workdir, 'packages', 'fleet'); const r = await run('npm', ['ci', '--no-audit', '--no-fund', '--prefix', target], { cwd: workdir }); if (!r.ok) throw new Error(String(r.error || 'npm ci failed').slice(0, 160)); },
-    gitIdentity: async workdir => { const r = await run(process.execPath, [join(REPO_ROOT, 'scripts', 'gh-as.mjs'), 'worker', '--set-git-identity'], { cwd: workdir }); if (!r.ok) throw new Error(String(r.error||'set-git-identity failed').slice(0,120)); },
+    installDeps: async workdir => {
+      const target = join(workdir, 'packages', 'fleet');
+      const r = await run('npm', ['ci', '--no-audit', '--no-fund', '--prefix', target], { cwd: workdir });
+      if (!r.ok) throw new Error(String(r.error || 'npm ci failed').slice(0, 160));
+    },
+    gitIdentity: async workdir => {
+      const r = await run(process.execPath, [join(REPO_ROOT, 'scripts', 'gh-as.mjs'), 'worker', '--set-git-identity'], {
+        cwd: workdir,
+      });
+      if (!r.ok) throw new Error(String(r.error || 'set-git-identity failed').slice(0, 120));
+    },
     profileOf: profileId => {
       const profile = profileEntry(profileId);
       return { agent: profile.agent, family: profile.modelFamily || profile.provider };
@@ -218,7 +301,9 @@ async function main() {
         const activities = await makeActivities();
         // 并发**显式化**（T27）：不设就是 SDK 默认，等于没定。会话是 I/O 等待为主（等模型），
         // 所以按核数 ×2 起，再按实测（~/.dao/admission 采样）调；上限由**渠道闸**兜底，不靠这里拍。
-        const concurrency = Number(args.concurrency || process.env.DAO_FLEET_CONCURRENCY || 0) || Math.max(4, (os.cpus?.().length || 4) * 2);
+        const concurrency =
+          Number(args.concurrency || process.env.DAO_FLEET_CONCURRENCY || 0) ||
+          Math.max(4, (os.cpus?.().length || 4) * 2);
         const worker = await Worker.create({
           maxConcurrentActivityTaskExecutions: concurrency,
           connection: native,
@@ -227,7 +312,9 @@ async function main() {
           workflowsPath: join(import.meta.dirname, 'workflows.mjs'),
           activities,
         });
-        process.stdout.write(`[fleet] worker 已启动：并发=${concurrency} queue=${args.queue || QUEUE} address=${ADDRESS} projects=${Object.keys(PROJECTS).join(',') || '（无）'}\n`);
+        process.stdout.write(
+          `[fleet] worker 已启动：并发=${concurrency} queue=${args.queue || QUEUE} address=${ADDRESS} projects=${Object.keys(PROJECTS).join(',') || '（无）'}\n`,
+        );
         await worker.run();
       } finally {
         await native.close();
@@ -243,7 +330,9 @@ async function main() {
         workflowId: task.id,
         args: [task],
       });
-      process.stdout.write(`${JSON.stringify({ started: true, workflowId: task.id, runId: handle.firstExecutionRunId })}\n`);
+      process.stdout.write(
+        `${JSON.stringify({ started: true, workflowId: task.id, runId: handle.firstExecutionRunId })}\n`,
+      );
       if (args.wait === true) {
         const result = await handle.result();
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -252,7 +341,11 @@ async function main() {
       return 0;
     }
     if (command === 'status' || command === 'signal') {
-      const id = taskIdOf({ repository: String(args.repo || ''), issue: Number(args.issue), generation: Number(args.generation || 1) });
+      const id = taskIdOf({
+        repository: String(args.repo || ''),
+        issue: Number(args.issue),
+        generation: Number(args.generation || 1),
+      });
       const handle = client.workflow.getHandle(id);
       if (command === 'status') {
         const status = await handle.query('status');
@@ -274,10 +367,12 @@ async function main() {
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
-  main().then(code => process.exit(code)).catch(error => {
-    process.stderr.write(`[fleet] ${String(error?.message || error)}\n`);
-    process.exit(1);
-  });
+  main()
+    .then(code => process.exit(code))
+    .catch(error => {
+      process.stderr.write(`[fleet] ${String(error?.message || error)}\n`);
+      process.exit(1);
+    });
 }
 
 export { main };

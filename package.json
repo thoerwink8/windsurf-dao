@@ -1,0 +1,12 @@
+{
+  "name": "windsurf-dao-tooling",
+  "private": true,
+  "description": "本仓只放机械项工具（prettier）。运行时代码不依赖 node_modules。",
+  "scripts": {
+    "format": "node scripts/dao-fix.mjs --changed",
+    "format:check": "node scripts/dao-fix.mjs --check --changed"
+  },
+  "devDependencies": {
+    "prettier": "3.6.2"
+  }
+}

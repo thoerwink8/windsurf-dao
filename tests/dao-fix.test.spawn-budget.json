@@ -1,0 +1,4 @@
+{
+  "budget": 3,
+  "why": "夹具要真起 node 进程跑 dao-fix（--check/--files 三种参数形态），进程内跑等于不验 CLI 边界。"
+}

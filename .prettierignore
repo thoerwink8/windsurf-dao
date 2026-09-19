@@ -1,0 +1,4 @@
+# 锁文件由 npm 自己写（prettier 解析它报错），不归格式闸管
+package-lock.json
+# 派生/证据原件：按字节原样（与 .gitattributes 的 -text 同口径）
+docs/evidence/**
