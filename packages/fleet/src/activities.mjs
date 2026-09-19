@@ -315,6 +315,11 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
   return {
     async prepare(task) {
       const repo = projectPath(task.repository);
+      // 公约「开工前先 pull」的机械版：**起树前先 fetch**——`ensureGitWorkspace` 拿 `origin/master`
+      // 当基线，本地那份过期就会从旧 master 起树，别的机器刚合的改动全看不见（用户 2026-09-19 提）。
+      // fetch 失败按可重试处理：宁可不做，不做过期的。
+      const fetched = await git(['fetch', 'origin', '--prune'], { cwd: repo });
+      if (!gitOk(fetched)) throw fail('SERVICE_UNAVAILABLE', `prepare fetch failed: ${String(fetched?.err || '').slice(0, 160)}`);
       const branch = branchOf(task);
       const tree = await ensureTree(repo, branch);
       if (!tree?.path) throw fail('SERVICE_UNAVAILABLE', 'workspace not created');
