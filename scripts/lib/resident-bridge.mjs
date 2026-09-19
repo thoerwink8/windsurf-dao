@@ -23,11 +23,12 @@ import { join, dirname } from 'node:path';
 export const BRIDGE_MAX_HOPS = 4;
 export const RESIDENT_RELS = ['CLAUDE.md', 'AGENTS.md', 'docs/global-CLAUDE.md'];
 
-/** 去掉围栏代码块与行内代码。坑① 的判据要在剥离后看。 */
+/** 去掉围栏代码块与行内代码。坑① 的判据要在剥离后看。
+ *  围栏用 `~{3}` 写而不是连写三个波浪号：连写会被仓外路径扫描器当成 `~/` 路径（2026-09-19 实咬）。 */
 export function stripCode(text) {
   return String(text || '')
     .replace(/```[\s\S]*?```/g, '')
-    .replace(/~~~[\s\S]*?~~~/g, '')
+    .replace(/~{3}[\s\S]*?~{3}/g, '')
     .replace(/`[^`\n]*`/g, '');
 }
 
