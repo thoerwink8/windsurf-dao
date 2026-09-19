@@ -318,7 +318,11 @@ export function createExecutionRuntime(opts={}) {
     try {
       const rt=backend(meta.recordKey,meta);
       started=spec.resumeFrom
-        ? (typeof rt.resumeSession==='function'?await rt.resumeSession(spec.resumeFrom,actual.prompt,{sessionKey:meta.sessionKey}):(()=>{throw Object.assign(new Error('backend does not expose resume'),{detail:{requestSent:false}});})())
+        ? (typeof rt.resumeSession==='function'
+            // 多带 agent/workdir/model：mirasim 的续跑要它们（形态是同一帧 prompt + sessionKey）；
+            // ACP 只读 {sessionKey}，多给的字段被忽略。
+            ? await rt.resumeSession(spec.resumeFrom,actual.prompt,{sessionKey:meta.sessionKey,agent:actual.agent,workdir:actual.workdir,model:actual.model,effort:actual.effort,route:actual.route})
+            : (()=>{throw Object.assign(new Error('backend does not expose resume'),{detail:{requestSent:false}});})())
         : await rt.startSession(actual);
       return await fence(()=>attachAccepted(meta,token,started));
     } catch(error) {

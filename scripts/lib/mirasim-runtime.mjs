@@ -1041,7 +1041,7 @@ export function createRuntime(opts = {}) {
     }
   }
 
-  async function startSession({ agent, workdir, prompt, model, effort, clientRef, route } = {}) {
+  async function startSession({ agent, workdir, prompt, model, effort, clientRef, route, continueFrom = null } = {}) {
     // promptSent / explicitlyRejected 供 catch 里判「这次失败到底发出去没有」（#1174）。
     let promptSent = false;
     let explicitlyRejected = false;
@@ -1137,6 +1137,10 @@ export function createRuntime(opts = {}) {
           prompt,
           agent,
           workdir,
+          // 续跑（continue）的形态就是**同一帧带上已有 sessionKey**：2026-09-19 回环 ws 实测
+          // （服务端 0.0.310）回 `{type:'accepted', sessionKey: 同一个}`；独立的 `{type:'continue'}`
+          // 帧无回帧、`continueFrom` 字段被忽略——两种都不是它的形态，别再试。
+          ...(continueFrom ? { sessionKey: continueFrom } : {}),
           ...(model ? { model } : {}),
           ...(effort ? { effort } : {}),
           ...(route ? { route: route === 'auto' ? null : route } : {}),
@@ -1170,7 +1174,12 @@ export function createRuntime(opts = {}) {
           throw new MirasimContractError(`prompt 应答形状不符：${verdict.errors.join('；')}`, { got: msg });
         }
         if (route && route !== 'auto') launchRouteBySession.set(verdict.sessionKey, route);
-        return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt };
+        // 续跑时服务端必须回**同一个** key：回了别的 key 说明它其实新开了一条会话——那不是续跑，
+        // 上下文没接上，按契约不符 fail-close（宁可报错，也别让上层以为续上了）。
+        if (continueFrom && verdict.sessionKey !== continueFrom) {
+          throw new MirasimContractError(`续跑返回了不同的 sessionKey（请求 ${continueFrom}，得到 ${verdict.sessionKey}）`);
+        }
+        return { sessionKey: verdict.sessionKey, taskId: verdict.taskId, startedAt, continued: Boolean(continueFrom) };
       } finally {
         wire.close();
       }
@@ -1188,6 +1197,23 @@ export function createRuntime(opts = {}) {
       error.detail = { ...(error.detail || {}), launchUncertain: promptSent && !explicitlyRejected, clientRef: clientRef || null };
       throw error;
     }
+  }
+
+  /**
+   * 续跑（continue）：对**已有**会话再发一帧 prompt，保住它的上下文（Fusion 的「各自持久上下文」）。
+   * 形态见 startSession 里 continueFrom 处的实测注释。opts 要带 agent/workdir（执行记录里有），
+   * 可选 model/effort/route/clientRef。服务端回不同 key → 按没续上 fail-close。
+   */
+  async function resumeSession(priorKey, prompt, opts = {}) {
+    if (typeof priorKey !== 'string' || !SESSION_KEY_RE.test(priorKey)) {
+      throw new MirasimRejectedError('续跑要给出有效的 sessionKey');
+    }
+    if (typeof prompt !== 'string' || !prompt.trim()) {
+      throw new MirasimRejectedError('续跑要给非空 prompt');
+    }
+    const { agent, workdir, model, effort, route, clientRef } = opts;
+    if (!agent || !workdir) throw new MirasimRejectedError('续跑要同时给 agent / workdir（执行记录里有）');
+    return startSession({ agent, workdir, prompt, model, effort, route, clientRef, continueFrom: priorKey });
   }
 
   // Identity reconciliation only. A matching record is not completion evidence.
@@ -1417,6 +1443,7 @@ export function createRuntime(opts = {}) {
   return {
     ensureWorkspace,
     startSession,
+    resumeSession,
     resolveStart,
     readSession,
     listSessions,

@@ -149,6 +149,35 @@ describe('activities bind the workflow to real systems', () => {
     await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /unknown after grace/);
     assert.deepEqual(sleeps, [], '宽限里不许再 sleep——waitForCompletion 自己会等到点，叠了就是 2× 墙钟');
   });
+  it('上游瞬时中断先续跑同一会话，不重开（用户拍板：Mirasim 支持 continue）', async () => {
+    const resumes = [];
+    const { activities, calls } = harness({
+      runtime: {
+        waitForCompletion: async () => ({ status: 'done' }),
+        readSession: async () => (resumes.length
+          ? text('```json\n{"plan":"Resumed."}\n```')
+          : { phase: 'done', text: '', error: 'unexpected status 503 Service Unavailable: 容量已满' }),
+        resumeSession: async (key, prompt) => { resumes.push({ key, prompt }); return { sessionKey: key }; },
+      },
+    });
+    const plan = await activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 });
+    assert.equal(plan.plan, 'Resumed.');
+    assert.equal(resumes.length, 1, '续跑一次即可');
+    assert.equal(resumes[0].key, 'session-1', '续的是同一条会话 key');
+    assert.equal(calls.filter(([kind]) => kind === 'startSession').length, 1, '不许重开会话');
+  });
+  it('非瞬时错误不续跑（续跑只治上游中断）', async () => {
+    const resumes = [];
+    const { activities } = harness({
+      runtime: {
+        waitForCompletion: async () => ({ status: 'done' }),
+        readSession: async () => ({ phase: 'done', text: '', error: 'lead output not parseable' }),
+        resumeSession: async key => { resumes.push(key); return { sessionKey: key }; },
+      },
+    });
+    await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), /not parseable/);
+    assert.deepEqual(resumes, []);
+  });
   it('接手时停不掉会话 → 不接手，报释放未核实', async () => {
     const { activities, calls } = harness({
       git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: H } : { status: 0, out: '' }),

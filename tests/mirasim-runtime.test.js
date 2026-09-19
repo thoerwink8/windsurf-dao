@@ -177,6 +177,37 @@ describe('契约断言', () => {
     assert.equal(Object.prototype.hasOwnProperty.call(omitted, 'route'), false);
   });
 
+  it('续跑（continue）：同一帧 prompt 带上已有 sessionKey，回同一个 key 才算续上', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'prompt'
+      ? [{ type: 'accepted', sessionKey: KEY, taskId: 'task-cont' }] : []));
+    const rt = await runtimeWith(wire);
+    const r = await rt.resumeSession(KEY, '继续：只回 PONG', { agent: 'claude', workdir: '/srv/work' });
+    assert.strictEqual(r.sessionKey, KEY);
+    assert.strictEqual(r.continued, true);
+    const sent = wire.sent.find(f => f.type === 'prompt');
+    // 2026-09-19 回环 ws 实测：形态就是 prompt + sessionKey；独立 continue 帧与 continueFrom 字段都不认。
+    assert.strictEqual(sent.sessionKey, KEY);
+    assert.strictEqual(sent.agent, 'claude');
+    assert.strictEqual(sent.workdir, '/srv/work');
+  });
+
+  it('续跑回的不是同一个 key：按没续上 fail-close', async () => {
+    const wire = fakeWire(goodState(), f => (f.type === 'prompt'
+      ? [{ type: 'accepted', sessionKey: 'claude:00000000-0000-0000-0000-000000000000', taskId: 't' }] : []));
+    const rt = await runtimeWith(wire);
+    await assert.rejects(
+      () => rt.resumeSession(KEY, '继续', { agent: 'claude', workdir: '/srv/work' }),
+      /不同的 sessionKey/,
+    );
+  });
+
+  it('续跑缺 agent/workdir 直接拒（执行记录里有，不该猜）', async () => {
+    const wire = fakeWire(goodState(), () => []);
+    const rt = await runtimeWith(wire);
+    await assert.rejects(() => rt.resumeSession(KEY, '继续', { agent: 'claude' }), /agent \/ workdir/);
+    assert.strictEqual(wire.sent.filter(f => f.type === 'prompt').length, 0, '拒了就不许发 prompt');
+  });
+
   it('应答帧的 sessionKey 形状不对：判契约不符，不硬着头皮往下走', async () => {
     const wire = fakeWire(goodState(), f => (f.type === 'prompt'
       ? [{ type: 'accepted', sessionKey: 'a8d67849', taskId: '' }] : []));
