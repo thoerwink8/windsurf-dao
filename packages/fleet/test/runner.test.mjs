@@ -50,6 +50,18 @@ describe('one durable task owns execution, review, rework and closure', () => {
     assert.equal(result.state, 'completed');
     assert.deepEqual(seen.advisory, [{ id: 'minor', severity: 'P2', detail: 'Minor.' }]);
   });
+  it('T7：返工反馈里带上一轮执行会话的 key（续跑用）', async () => {
+    let seen = null;
+    let reviews = 0;
+    let execs = 0;
+    const f = fixture({
+      execute: async (_task, { feedback }) => { if (feedback) seen = feedback; return { repository: 'owner/repo', head: execs++ ? B : A, checkpoint: 'artifact', sessionKey: execs === 1 ? 's1' : 's2' }; },
+      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: reviews++ ? [] : [{ id: 'x', severity: 'P1', detail: 'd' }] }),
+    });
+    const result = await runFusionTask(task(), f.io);
+    assert.equal(result.state, 'completed');
+    assert.equal(seen.sessionKey, 's1');
+  });
   it('keeps rework inside the same task and does not integrate an earlier rejected head', async () => {
     let reviews = 0;
     const f = fixture({
