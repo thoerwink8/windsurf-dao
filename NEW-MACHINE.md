@@ -433,6 +433,11 @@ orca account add --help
 # mirasim-server ws 探活（#1151，判活看 state+sessions 帧不是 HTTP 200）：sudo bash scripts/install-mirasim-ws-probe.sh
 #   一并收 mirasim-server.service（含 MemoryHigh=2.5G / MemoryMax=4G 垫片）+ 探活 timer（*:08/10）+ sudoers 白名单
 #   验：systemctl list-timers 里 mirasim-ws-probe.timer 的 NEXT 必须是时间；手搓 drop-in memory-guard.conf 应已删
+#   unit 带 MIRASIM_NO_AGENT_EGRESS=1 / MIRASIM_ACCOUNT_USAGE_PROBE=0（2026-09-19）：不带，mirasim 会借 reclaude 写进
+#   ~/.claude/settings.json 的代理出网，每分钟拿 haiku 探额度被 reclaude 400，relay 腿还平白依赖 reclaude 活着。
+#   验：~/.reclaude/logs/daemon.log 不再新增 non-cc-client（server-check ㉕）。
+#   桌面 Mirasim remote-ssh 连这台机要用 orca 账号，不用 root：root 连会在 /root/.mirasim-remote 拉起第二个
+#   mirasim（不归本 unit 管、开关带不上），还会在服务用户的树里留 root 属主文件（(21)）。
 # GitHub 事件桥（#956，PR 一动就叫醒指挥官，不等轮询）：sudo bash scripts/install-dao-gh-events.sh
 #   不开端口、不要域名证书：桥内部跑 `gh webhook forward`，GitHub 那边是出站长连接。
 #   装完自己会等一个自证 ping 从 GitHub 绕回来，等不到就判失败——「装上了」不等于「会跑」。

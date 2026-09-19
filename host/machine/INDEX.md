@@ -47,6 +47,8 @@
 | C | ~/.local/share/devin/credentials.toml | Linux 上 Devin CLI 登录态（`devin auth`）。0600，不进 git。Windows 同物见 `~/AppData/Local/devin` |
 | E | ~/.config/ai-gateway | 归 `ai-gateway-stack`。本仓不写装法、不写值 |
 | E | ~/.reclaude | 归 `ai-gateway-stack`。reclaude（Claude Code 官方 CLI 的代理/隧道客户端）落点：`device.*`（凭据）/`ca.pem`（MITM CA）/`state.json`/`claude.path`（**现役 claude 是哪份**，写绝对路径）。装法与检查见 `deploy/machine-check.mjs` 的 `checkReclaudeEnv`；判例 `docs/observations/2026-09-19-reclaude接入五步与两处退役接线.md`。本仓不写装法 |
+| E | ~/.reclaude/logs | 归 `ai-gateway-stack`。reclaude 守护自己的日志（`daemon.log`，只追加）。本仓**只读**：server-check ㉕ 拿它判「reclaude 有没有在替 mirasim 收流量」（每拒一次非 Claude Code 客户端写一行 `non-cc-client`），判例 `docs/observations/2026-09-19-mirasim借reclaude代理出网.md`。不写、不拷 |
+| E | ~/.mirasim-remote | 归 mirasim 桌面端。桌面 Mirasim remote-ssh 连上来时在**连接账号**家目录自动拉起的第二个 mirasim server（`servers/<版本>/`、`run/server.sock`、`current/start.sh`），每次连接重生。服务用户家里不该有它；出现在 `/root` 说明桌面端用 root 连了（NEW-MACHINE §9d：改用 orca 连）。本仓不装、不写、不拷 |
 | D | ~/.config/orca | NEW-MACHINE §9d。Linux 上 Orca 的 userData profile（单实例锁 / daemon socket / 日志）。Orca 开着会回写，不要拷、不要改；Windows 同物是 %APPDATA%\orca |
 | D | ~/mirasim-worktrees | mirasim 派工树根（#880）。布局 `~/mirasim-worktrees/<仓>/<分支>`。指挥官 #1007 准入两层枚举这里，再对 `~/.mirasim/sessions` 的存活事实数在途工人（不按一层仓目录猜）。运行态，换机不拷 |
 | A | ~/.dao/admission | 派单准入采样（#1007）。指挥官每轮追加 `{at,inFlight,memAvailableMb,loadNorm}` 到 `samples.ndjson`，用相邻样本差推单工人占用。不进 git，换机重生成 |

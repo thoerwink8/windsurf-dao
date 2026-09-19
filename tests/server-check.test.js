@@ -34,6 +34,7 @@ import {
   walkUsageInstallFiles,
   judgeUsageInstallCopy,
   DAO_CHECK_NESTED_TIMEOUT_MS,
+  classifyReclaudeNonCc,
 } from '../scripts/server-check.mjs';
 import { classifyLandTimer, LAND_TIMER, LAND_INSTALL } from '../scripts/lib/land-automation.mjs';
 
@@ -1113,4 +1114,33 @@ test('#984 ⑪ 预算 60s；orca 产品面检查已删', () => {
   for (const name of ['① orca 在 PATH', '④ runtime 可达', '⑨ 本仓已注册进 orca']) {
     assert.equal(src.includes(name), false, `${name} 必须已删，不许再挂退役牌`);
   }
+});
+
+test('(25) reclaude non-cc-client 三态：窗口内命中 red，窗口外 ok，无样本/陈旧 unknown', () => {
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.123`;
+  const now = new Date(2026, 8, 19, 23, 50, 0);
+  const at = (minAgo) => stamp(new Date(now.getTime() - minAgo * 60_000));
+  const line = (minAgo, ev = 'non-cc-client') => `${at(minAgo)} reclaude event: ${ev}`;
+
+  // 真实日志形状：拒绝行与 update 行混着，只有拒绝行计数。
+  const red = classifyReclaudeNonCc({ probed: true, now: now.getTime(), lines: [
+    `${at(40)} reclaude update: already on the latest version`,
+    line(29), line(3), `${at(1)} reclaude update: already on the latest version`, '',
+  ] });
+  assert.equal(red.state, 'red');
+  assert.equal(red.count, 2);
+  assert.match(red.detail, /MIRASIM_NO_AGENT_EGRESS=1/);
+
+  // 窗口外的拒绝不算；守护最近有写日志 → 有样本 → ok/0。
+  const ok = classifyReclaudeNonCc({ probed: true, now: now.getTime(), lines: [line(31), `${at(2)} reclaude update: already on the latest version`] });
+  assert.equal(ok.state, 'ok');
+  assert.equal(ok.count, 0);
+
+  // 没样本三种：读不到、一行时间戳都没有、守护 24h 没写——全 unknown，不许当 0 条。
+  assert.equal(classifyReclaudeNonCc({ probed: false, reason: 'ENOENT' }).state, 'unknown');
+  assert.equal(classifyReclaudeNonCc({ probed: true, now: now.getTime(), lines: ['garbage', ''] }).state, 'unknown');
+  const stale = classifyReclaudeNonCc({ probed: true, now: now.getTime(), lines: [line(25 * 60)] });
+  assert.equal(stale.state, 'unknown');
+  assert.match(stale.detail, /没写过日志/);
 });
