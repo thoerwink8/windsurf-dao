@@ -83,5 +83,26 @@ jobs:
           # ⑭ open 单数量阈值会一直 SKIP（没查成，不是绿）。
           GH_TOKEN: ${{ github.token }}
 
+      # #1422：packages/fleet 的单元测试进 CI——此前不在 CI 面上，改坏了只有本地跑的人知道。
+      - name: fleet 单元测试
+        working-directory: packages/fleet
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm test
+
+      # #1422：集成测试用**固定版本**的 Temporal CLI。sha256 必须对得上，不对就让这步失败
+      # （不校验的下载 = 「装上了」不等于「装的是那份」）。
+      - name: fleet 集成测试（固定版本 Temporal CLI）
+        working-directory: packages/fleet
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/temporal_cli.tar.gz \
+            https://github.com/temporalio/cli/releases/download/v1.8.3/temporal_cli_1.8.3_linux_amd64.tar.gz
+          echo "6f0afac1e9ddea71f480c43a49f5db5167a244c21db923707f069a79bcabdfea  /tmp/temporal_cli.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/temporal_cli
+          tar -xzf /tmp/temporal_cli.tar.gz -C /tmp/temporal_cli
+          DAO_FLEET_TEST_TEMPORAL_PATH=/tmp/temporal_cli/temporal npm run test:integration
+
       # 影响地图（TIA）不进 git，是每台机器自己的派生数据 ⇒ CI 这里没有地图，也不需要有。
       # 它现在是 dao-check 跑测试的副产物，没有建图动作、没有健康闸、没有漂移比对。
