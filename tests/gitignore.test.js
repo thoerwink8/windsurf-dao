@@ -19,13 +19,14 @@ test('node_modules 一律被 ignore（根 / 子包 / 任何层）', () => {
 
 test('自动产物被 ignore；源文件不许被误 ignore', () => {
   assert.equal(ignored('.playwright-mcp/'), true);
-  assert.equal(ignored('pr-body-123.md'), true, '仓根手写的 PR 正文草稿不进 git');
   assert.equal(ignored('scripts/repo-hygiene.mjs'), false);
   assert.equal(ignored('.gitignore'), false);
 });
 
 test('仓根不许有**已跟踪**的一次性文件（防「git add -A 把草稿卷进去」）', () => {
   // 2026-09-19 实咬：我自己把仓根取数用的 .iss*.json 卷进了 #1502；更早还有 3 个 pr-body-*.md。
+  // 与 #1001 互补：#1001 说的是**不给** pr-body-<N> 加 ignore（未跟踪派生物交 board-gc 处理）；
+  // 这里守的是**已跟踪**那一格——board-gc 管不到已进版本库的文件。
   const out = spawnSync('git', ['ls-files', '.iss*.json', 'pr-body-*.md', '_tmp-*'], { cwd: ROOT, encoding: 'utf8' });
   assert.equal(out.status, 0);
   const strays = String(out.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
