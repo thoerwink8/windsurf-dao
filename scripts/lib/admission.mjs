@@ -337,7 +337,28 @@ const SELFHEAL_LABELS = new Set(['type/指挥官', 'type/看门狗', 'type/派�
 
 function labelNamesOf(issue) {
   const labels = Array.isArray(issue?.labels) ? issue.labels : [];
-  return labels.map((l) => (l && typeof l.name === 'string' ? l.name : '')).filter(Boolean);
+  return labels.map((l) => (typeof l === 'string' ? l : (l && typeof l.name === 'string' ? l.name : ''))).filter(Boolean);
+}
+
+/** T45：多急的轴——`priority/P0|P1|P2` 标签（#1460 2026-09-19 拍板：GitHub 原生轴，不另造容器）。 */
+export const PRIORITY_LABELS = Object.freeze({ 'priority/P0': 0, 'priority/P1': 1, 'priority/P2': 2 });
+/** 没标优先级 = 3（排在标了 P2 的后面）——**「没标」不等于「不急」**，但确实不该插到标了的单前面。 */
+export const PRIORITY_NONE = 3;
+
+export function priorityRankOf(issue) {
+  let best = PRIORITY_NONE;
+  for (const name of labelNamesOf(issue)) {
+    const rank = PRIORITY_LABELS[name];
+    if (Number.isInteger(rank) && rank < best) best = rank;
+  }
+  return best;
+}
+
+/** 人读的名字，进 `why` 供回读（「为什么先派它」要能查，不是模型感觉）。 */
+const PRIORITY_NAME_BY_RANK = ['priority/P0', 'priority/P1', 'priority/P2'];
+
+export function priorityNameOf(rank) {
+  return PRIORITY_NAME_BY_RANK[rank] || '无优先级';
 }
 
 function isFramework(issue) {
@@ -403,10 +424,13 @@ export function prioritizeReady(issues, { openIssues, openPrs, roundsByIssue } =
       const blockedByOthers = blocking.has(i.number);
       const selfHeal = isSelfHeal(i);
       const rank = blockedByOthers ? 0 : selfHeal ? 1 : 2;
-      return { n: i.number, rank, rounds: roundsOf(i, roundsByIssue), born: bornMs(i) };
+      return { n: i.number, rank, pri: priorityRankOf(i), rounds: roundsOf(i, roundsByIssue), born: bornMs(i) };
     });
-  // 同类里：轮次多的先收口，再按等待时间（出生早的先），最后单号。
-  rows.sort((a, b) => (a.rank - b.rank) || (b.rounds - a.rounds) || (a.born - b.born) || (a.n - b.n));
+  // T45（#1460 2026-09-19 拍板）：**多急**是第二根轴，但排在结构位之后——
+  //   rank 0/1 是「不解锁别人 / 不自愈就会让整个盘面停住」的结构性理由，先于「谁更急」；
+  //   同一结构位里：priority/P0 → P1 → P2 → 没标（没标不等于不急，但不该插到标了的单前面）。
+  //   再往下才是老规矩：轮次多的先收口 → 等得久的先 → 单号小的先。
+  rows.sort((a, b) => (a.rank - b.rank) || (a.pri - b.pri) || (b.rounds - a.rounds) || (a.born - b.born) || (a.n - b.n));
   return rows.map((r) => r.n);
 }
 

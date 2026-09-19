@@ -291,6 +291,39 @@ describe('prioritizeReady', () => {
     const plain = { number: 20, title: '普通', labels: [{ name: 'type/写码' }] };
     assert.deepEqual(prioritizeReady([plain, fw]), [5, 20]);
   });
+
+  // T45（#1460 2026-09-19 拍板）：多急的轴 = priority/P0|P1|P2
+  it('T45：同一结构位里按 priority/P0 → P1 → P2 → 没标', async () => {
+    const { prioritizeReady } = await ADMIT;
+    const p2 = { number: 10, title: 'p2', labels: [{ name: 'type/写码' }, { name: 'priority/P2' }] };
+    const p0 = { number: 40, title: 'p0', labels: [{ name: 'type/写码' }, { name: 'priority/P0' }] };
+    const none = { number: 5, title: '没标', labels: [{ name: 'type/写码' }] };
+    const p1 = { number: 30, title: 'p1', labels: [{ name: 'type/写码' }, { name: 'priority/P1' }] };
+    assert.deepEqual(prioritizeReady([p2, p0, none, p1]), [40, 30, 10, 5]);
+  });
+
+  it('T45：结构位先于优先级——被引用的单与自愈单不被 P0 顶掉', async () => {
+    const { prioritizeReady } = await ADMIT;
+    const block = { number: 50, title: '被引用', labels: [{ name: 'type/写码' }, { name: 'priority/P2' }] };
+    const heal = { number: 80, title: '指挥官派单准入坏了', labels: [{ name: 'type/写码' }] };
+    const p0 = { number: 90, title: 'P0 普通单', labels: [{ name: 'type/写码' }, { name: 'priority/P0' }] };
+    const citer = { number: 200, title: '等 #50', body: '#50', labels: [] };
+    assert.deepEqual(
+      prioritizeReady([p0, heal, block], { openIssues: [p0, heal, block, citer] }),
+      [50, 80, 90],
+    );
+  });
+
+  it('T45：priorityRankOf 认对象标签也认字符串标签；多个时取最急的那个', async () => {
+    const { priorityRankOf, priorityNameOf, PRIORITY_NONE } = await ADMIT;
+    assert.equal(priorityRankOf({ labels: ['priority/P2'] }), 2);
+    assert.equal(priorityRankOf({ labels: [{ name: 'priority/P1' }] }), 1);
+    assert.equal(priorityRankOf({ labels: ['priority/P2', 'priority/P0'] }), 0);
+    assert.equal(priorityRankOf({ labels: ['type/写码'] }), PRIORITY_NONE);
+    assert.equal(priorityRankOf({}), PRIORITY_NONE);
+    assert.equal(priorityNameOf(0), 'priority/P0');
+    assert.equal(priorityNameOf(PRIORITY_NONE), '无优先级');
+  });
 });
 
 describe('decide 接线：准入 + 优先级', () => {
