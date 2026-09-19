@@ -67,7 +67,11 @@ export function parseSingle(text, predicate) {
 export const parseFindings = text => parseSingle(text, value => Array.isArray(value.findings));
 export const parsePlan = text => parseSingle(text, value => typeof value.plan === 'string' && value.plan.trim().length > 0);
 
-export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = DEFAULT_UNKNOWN_WAIT_MS, unknownWaitRounds = DEFAULT_UNKNOWN_WAIT_ROUNDS, sleepFn = sleep, now = () => new Date().toISOString() }) {
+/** 上游瞬时中断（容量/限流/断流/超时）：这些**续跑**比重开划算——上下文还在（用户拍板：
+ *  Mirasim 支持 continue；形态与实测见 scripts/lib/mirasim-runtime.mjs 的 resumeSession）。 */
+const TRANSIENT_UPSTREAM = /503|capacity|rate.?limit|429|service unavailable|timed?\s*out|超时|容量|stream closed|ECONNRESET|EPIPE/i;
+
+export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = DEFAULT_UNKNOWN_WAIT_MS, unknownWaitRounds = DEFAULT_UNKNOWN_WAIT_ROUNDS, resumeAttempts = 2, sleepFn = sleep, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
     const path = projects[repository];
     if (!path) throw fail('UNSUPPORTED_CAPABILITY', `no local checkout mapped for ${repository}`);
@@ -164,6 +168,17 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       const released = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
       if (released?.ok !== true) throw fail('SERVICE_UNAVAILABLE', `unknown session could not be released: ${String(released?.why || '').slice(0, 120)}`);
       throw fail('DEADLINE_EXCEEDED', `${role} session unknown after grace; session stopped to free the tree`);
+    }
+    // 上游瞬时中断（容量/限流/断流/超时）：**先续跑同一会话**，不要重开——重开会把上下文全丢掉，
+    // 而且重开还要再赌一次容量（用户拍板：Mirasim 支持 continue；ACP 走 session/load）。
+    // 续不上（后端不支持 / 服务端回了别的 key）就原样交上层按可重试处理，不硬来。
+    for (let attempt = 0; attempt < resumeAttempts && (settled?.status === 'done' || settled?.status === 'failed') && TRANSIENT_UPSTREAM.test(String(view?.error || '')); attempt += 1) {
+      const meta = profileMeta(profile.profile);
+      const resumed = await runtime.resumeSession(key, `继续：上一轮被上游中断（${String(view?.error || '').slice(0, 120)}）。接着原任务做完，不要从头重来。`, { agent: meta?.agent, workdir, model: profile.profile }).catch(error => ({ sessionKey: null, why: String(error?.message || error) }));
+      if (resumed?.sessionKey !== key) break;
+      settled = await runtime.waitForCompletion(key, { timeoutMs: task.limits.stepTimeoutSeconds * 1000 });
+      view = await runtime.readSession(key);
+      if (isWaiting(settled, view)) throw fail('WAITING_USER', `${role} session is waiting for an answer`, { sessionKey: key, role });
     }
     return { key, status: settled?.status, view };
   };
