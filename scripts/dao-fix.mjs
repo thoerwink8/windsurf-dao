@@ -24,7 +24,7 @@ const filesArg = argv.includes('--files')
   ? argv.slice(argv.indexOf('--files') + 1).filter(x => !x.startsWith('--'))
   : null;
 
-const git = args => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
+const git = args => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', windowsHide: true }).trim();
 
 /** 行尾策略：`.gitattributes` 里 `-text` 或 `eol=lf` 的文件按字节不动/用 LF；其余用 LF。 */
 function attributes() {
