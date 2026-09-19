@@ -18,7 +18,7 @@
 # User=orca 是硬要求：ExecStart 指进 /srv/projects/windsurf-dao，那个仓每个执行体都能写。
 
 [Unit]
-Description=windsurf-dao 仓库卫生巡检（未推/未拉 + PR 积压）
+Description=windsurf-dao 仓库卫生巡检（未推/未拉 + PR 积压 + 落后单清退）
 After=network-online.target
 
 [Service]
@@ -33,6 +33,9 @@ Environment=GH_CONFIG_DIR=/var/empty
 # 单引号是必需的：systemd 会剥掉 Environment= 里的双引号（2026-09-19 实咬，#1463）。
 Environment=DAO_HYGIENE_REPOS=/srv/projects/ai-gateway-stack
 Environment='DAO_HYGIENE_MACHINES=[]'
+# 先执行落后单清退（#1503 两段式：闲置超阈打「待清退」，再超阈才关）；`-` 前缀 = 它失败不挡下面的报告。
+# 报告（下面那条）随后把「还有该清退的」判红——清退悄悄坏掉会被这条闸看见。
+ExecStart=-/usr/bin/node /srv/projects/windsurf-dao/scripts/issue-retire.mjs --apply
 ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/repo-hygiene.mjs
 SuccessExitStatus=0
 StandardOutput=journal
