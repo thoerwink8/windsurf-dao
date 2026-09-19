@@ -23,6 +23,7 @@ function fixture(overrides = {}) {
     execute: async () => ({ repository: 'owner/repo', head: A, checkpoint: 'artifact' }),
     verify: async (_task, artifact) => ({ scanned: true, head: artifact.head, checks: [{ name: 'check', status: 'COMPLETED', conclusion: 'SUCCESS' }] }),
     selfReview: async (_task, artifact) => ({ scanned: true, head: artifact.head, findings: [] }),
+    changedFiles: async () => ({ scanned: true, files: ['scripts/lib/x.mjs'] }),
     review: async (_task, artifact) => ({ ...pass(), head: artifact.head }),
     integrate: async (_task, artifact) => ({ repository: 'owner/repo', issue: 17, pr: 19, merged: true, sourceHead: artifact.head, mergeCommit: M, baseRefName: 'master' }),
     deploy: async () => ({ checked: true, healthy: true, commit: M }),
@@ -39,7 +40,7 @@ describe('one durable task owns execution, review, rework and closure', () => {
     const result = await runFusionTask(task(), f.io);
     assert.equal(result.state, 'completed');
     assert.equal(result.acceptedHead, A);
-    assert.deepEqual(f.calls, ['prepare', 'lead', 'execute', 'verify', 'selfReview', 'review', 'integrate', 'closeIssue']);
+    assert.deepEqual(f.calls, ['prepare', 'lead', 'execute', 'verify', 'changedFiles', 'selfReview', 'review', 'integrate', 'closeIssue']);
   });
   it('T32：P2/P3（advisory）随 delivery 走到 closeIssue，不被丢掉', async () => {
     let seen = null;
@@ -96,6 +97,30 @@ describe('one durable task owns execution, review, rework and closure', () => {
     assert.deepEqual(seen.blocking.map((x) => x.id), ['naming']);
     assert.equal(f.calls.filter((n) => n === 'selfReview').length, 2);
     assert.equal(f.calls.filter((n) => n === 'review').length, 1, '异厂审查只在自审干净后才跑');
+  });
+  it('T34：纯文档改动（T0）→ CI 绿即过，不派自审也不派异厂审查', async () => {
+    const f = fixture({ changedFiles: async () => ({ scanned: true, files: ['docs/x.md', 'README.md'] }) });
+    const result = await runFusionTask(task(), f.io);
+    assert.equal(result.state, 'completed');
+    assert.equal(result.riskTier, 'T0');
+    assert.equal(f.calls.includes('selfReview'), false);
+    assert.equal(f.calls.includes('review'), false);
+  });
+  it('T34：孤立代码（T1）→ 只走一条异厂审查，不派自审', async () => {
+    const f = fixture({ changedFiles: async () => ({ scanned: true, files: ['src/thing.js'] }) });
+    const result = await runFusionTask(task(), f.io);
+    assert.equal(result.state, 'completed');
+    assert.equal(result.riskTier, 'T1');
+    assert.equal(f.calls.includes('selfReview'), false);
+    assert.equal(f.calls.includes('review'), true);
+  });
+  it('T34：没查成（文件清单空）→ 保守按 T2 走全流程', async () => {
+    const f = fixture({ changedFiles: async () => ({ scanned: false, files: [] }) });
+    const result = await runFusionTask(task(), f.io);
+    assert.equal(result.state, 'completed');
+    assert.equal(result.riskTier, 'T2');
+    assert.equal(f.calls.includes('selfReview'), true);
+    assert.equal(f.calls.includes('review'), true);
   });
   it('keeps rework inside the same task and does not integrate an earlier rejected head', async () => {
     let reviews = 0;

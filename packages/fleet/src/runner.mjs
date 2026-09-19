@@ -1,8 +1,9 @@
 import { normalizeTask, judgeReview, judgeChecks, judgeDelivery, classifyStepFailure } from './contract.mjs';
 import { splitFindings } from './triage.mjs';
+import { classifyRisk, tierPlan } from './risk.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
-const phases = { prepare: 'preparing', lead: 'planning', execute: 'executing', verify: 'verifying', selfReview: 'self-reviewing', review: 'reviewing', integrate: 'integrating', deploy: 'deploying', closeIssue: 'closing' };
+const phases = { prepare: 'preparing', lead: 'planning', execute: 'executing', verify: 'verifying', changedFiles: 'classifying', selfReview: 'self-reviewing', review: 'reviewing', integrate: 'integrating', deploy: 'deploying', closeIssue: 'closing' };
 const copy = value => JSON.parse(JSON.stringify(value));
 
 export async function runFusionTask(input, io, { previous, cancelled = () => false, onState = () => {} } = {}) {
@@ -71,21 +72,36 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
         // 检查失败不进审查：把失败本身当返工输入，别烧一轮审查预算去审一份过不了闸的东西。
         state.round += 1;
         state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: [{ id: 'checks-failed', severity: 'P1', detail: `契约检查未通过：${JSON.stringify(state.checks.checks)}` }], sessionKey: state.artifact.sessionKey };
-        delete state.plan; delete state.artifact; delete state.checks; delete state.review; delete state.selfReview;
+        delete state.plan; delete state.artifact; delete state.checks; delete state.review; delete state.selfReview; delete state.risk;
         report();
         continue;
       }
+      // T34 风险分层：按爆炸半径决定这一步要不要自审/异厂审查（严格程度正比于爆炸半径）。
+      if (!state.risk) {
+        state.risk = await step('changedFiles', state.artifact);
+        report();
+      }
+      state.riskTier = classifyRisk({ files: state.risk?.files }) || 'T2';
+      const tierSteps = tierPlan(state.riskTier);
+      if (!tierSteps.review) {
+        // T0（纯文档）：CI 绿即过，不派审查。
+        state.acceptedHead = state.artifact.head;
+        report();
+        break;
+      }
       // T33 两级审查的第一级：lead 自审（上下文还热、便宜）先捞掉便宜的，异厂审查者看到更干净的产物。
-      // 它**不参与判定**：只把判为「当场修」的当返工输入；其余照旧走异厂审查。
-      if (!state.selfReview) {
+      // 它**不参与判定**：只把判为「当场修」的当返工输入；其余照旧走异厂审查。T1 跳过这一级。
+      if (tierSteps.selfReview && !state.selfReview) {
         state.selfReview = await step('selfReview', state.artifact, { checks: state.checks, plan: state.plan });
         report();
       }
-      const { rework: selfRework } = splitFindings({ findings: state.selfReview?.findings || [], resumable: !!state.artifact.sessionKey });
+      const { rework: selfRework } = tierSteps.selfReview
+        ? splitFindings({ findings: state.selfReview?.findings || [], resumable: !!state.artifact.sessionKey })
+        : { rework: [] };
       if (selfRework.length) {
         state.round += 1;
         state.feedback = { head: state.artifact.head, checkpoint: state.artifact.checkpoint, checks: state.checks, blocking: selfRework, sessionKey: state.artifact.sessionKey };
-        delete state.plan; delete state.artifact; delete state.checks; delete state.review; delete state.selfReview;
+        delete state.plan; delete state.artifact; delete state.checks; delete state.review; delete state.selfReview; delete state.risk;
         report();
         continue;
       }
@@ -114,9 +130,11 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
       delete state.checks;
       delete state.review;
       delete state.selfReview;
+      delete state.risk;
       report();
     }
-    if (judgeReview(task, state.acceptedHead, state.review).state !== 'passed' || judgeChecks(task, state.acceptedHead, state.checks).state !== 'passed') {
+    const reviewOk = state.riskTier === 'T0' || judgeReview(task, state.acceptedHead, state.review).state === 'passed';
+    if (!reviewOk || judgeChecks(task, state.acceptedHead, state.checks).state !== 'passed') {
       return finish('blocked', 'accepted-evidence-invalid', { failureClass: 'unscanned' });
     }
     if (!state.delivery?.merged) {
