@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "stage": "v2.11",
+  "title": "v2.11 期：指挥官+Fusion 落地",
+  "milestone": "v2.11 期：指挥官+Fusion 落地",
+  "goal": "新链路（指挥官+Fusion）从「能跑通一次」变成「能承接全部新活」：机制立住、性能可测、眼睛（数据面）可读。",
+  "openedAt": "2026-09-19",
+  "closedAt": null,
+  "openedBy": "user+devin",
+  "why": "用户 2026-09-19：机制仓库实现新机制还要走老机制，本身不合适；把「一阶段的全部盘面」做成容器（用 GitHub 里程碑当容器，仓里 #966 已有「当前在做/将来某版」两档先例）。",
+  "scope": [
+    {
+      "kind": "机制",
+      "id": "transition-decision",
+      "what": "过渡决定文档：新机制的活走新链路（dogfood）+ 老链路降级兜底 + 闸（不许新活依赖老链路）",
+      "where": "#816 方案"
+    },
+    {
+      "kind": "机制",
+      "id": "T7",
+      "what": "持久上下文：返工续跑同一会话（Devin「当场修复」靠的就是它；也是省额度）",
+      "where": "#1460"
+    },
+    {
+      "kind": "吞吐",
+      "id": "T27",
+      "what": "并发已显式化=12；还差 N=4/8/12 逐档压测（成功率/时长/内存峰值/渠道 busy 率）",
+      "where": "#1460"
+    },
+    {
+      "kind": "性能",
+      "id": "T29",
+      "what": "会话路径体检（脚本已建）：VPS 侧对比 + 两件便宜大件（少发请求 / 别每次起进程）+ 量 fence 持有时间",
+      "where": "#1460"
+    },
+    {
+      "kind": "眼睛",
+      "id": "T26-dataface",
+      "what": "看板**数据面**：任务/腿表/制度三墙的机器可读投影（JSON 主 + md 镜像）；UI/动作留下一版",
+      "where": "#818"
+    },
+    {
+      "kind": "机制",
+      "id": "T30",
+      "what": "网关加里程碑动作（否则把 issue 挂进版本只能裸 gh issue edit，违反「issue 写动作只走网关」）",
+      "where": "#1460"
+    },
+    {
+      "kind": "真问题",
+      "id": "1420",
+      "what": "[P1] 会话卡在 stopping、盘上零进程，租约 GC 判它「活着」——正是 T4 的邻域",
+      "where": "issue"
+    },
+    {
+      "kind": "真问题",
+      "id": "1447",
+      "what": "[P1] 解冲突返工在脏树上空转（派了两次、两次零产出）",
+      "where": "issue"
+    },
+    {
+      "kind": "真问题",
+      "id": "1353",
+      "what": "mirasim 保活/GC 接活前消除删树竞态",
+      "where": "issue"
+    }
+  ],
+  "deferred": [
+    {
+      "id": "1439",
+      "why": "候选队列派工没重试计数——那是**旧链路**的队列；旧链路 2026-09-19 已停用，顺延观察"
+    },
+    {
+      "id": "819",
+      "why": "Windows 录像员（miraquota-win 上线前仿真人点击）——真活，但不在「新链路立住」这条线上"
+    },
+    {
+      "id": "955",
+      "why": "人设层（agency-agents 目录做成可装卸角色库）——同上"
+    },
+    {
+      "id": "1174",
+      "why": "统一执行改造余项——主体已落地（ACP/额度），余项等下轮"
+    },
+    {
+      "id": "818-ui",
+      "why": "看板 UI/动作面（网页/飞书卡片/按钮）——数据面进本版，UI 进下一版"
+    }
+  ],
+  "exits": [
+    {
+      "id": "scope-closed",
+      "what": "范围内全部条目已关闭，或在 moved/deferred 里显式记账（带理由）",
+      "how": "机械判：本文件 + issue 状态"
+    },
+    {
+      "id": "gates-green",
+      "what": "闸全绿：PR 积压=0、仓库卫生=绿（repo-hygiene）、机器清单=绿（machine-inventory）",
+      "how": "机械判：两条脚本的 --json"
+    },
+    {
+      "id": "smoke-loop",
+      "what": "回归验收：跑一条冒烟任务走完 fleet 全闭环（issue → PR → 合并 → 关单 → completed）",
+      "how": "机械判：Temporal status = completed"
+    },
+    {
+      "id": "release",
+      "what": "触发发布列车（tag + 版本号），版本单随之关闭",
+      "how": "release-train"
+    }
+  ],
+  "rules": [
+    "当前在做同时只有一个 OPEN 版本（与「同一 slug 只许一张 OPEN 单」同精神）",
+    "范围外的活要么移入（带理由）要么顺延（带理由），不许静默丢",
+    "出口判据里的冒烟任务必须由新链路自己跑（dogfood），人只读结果",
+    "版本可以中止（≠失败，是显式决定）：写明已落地怎么处置、未落地去哪一版"
+  ],
+  "debt": {
+    "note": "债单（P2/P3 审查发现）的账：按指纹去重，批量还（T32）。出口前必须还清或显式接受。",
+    "items": [],
+    "rules": [
+      "P1 仍阻塞合并；P2/P3 不进热路径返工",
+      "债单按 文件:行:类型 指纹去重，同一处只累加计数",
+      "每周批量还债由 fleet 自己跑，用成本高效的腿",
+      "出口判据：债还清或显式接受（带理由）"
+    ],
+    "axes": [
+      "严重度 P1/P2/P3（不变）",
+      "类型 security|data|contract|correctness|perf|maintainability|ui",
+      "可达性（只对 security/data：生产可达？）"
+    ],
+    "sla": {
+      "note": "类型 × 严重度 → 到期日；超期进 repo-hygiene 红。类型优先于严重度：安全/数据类不许静默搁置。",
+      "immediate": [
+        "security(可达) P1/P2",
+        "data P1/P2",
+        "contract P1",
+        "correctness P1",
+        "perf P1",
+        "maintainability P1",
+        "ui P1"
+      ],
+      "withinOneWeek": [
+        "security(可达) P3",
+        "security(不可达) P2",
+        "data P3",
+        "contract P2/P3",
+        "correctness P2/P3"
+      ],
+      "withinTwoWeeks": [
+        "perf P2"
+      ],
+      "debtBatch": [
+        "maintainability P2/P3",
+        "ui P2/P3",
+        "perf P3"
+      ]
+    },
+    "modelContract": "审查输出加 type 字段（枚举）；SLA 矩阵在代码里算，不由模型判期限（模型只分类，代码算期限）。",
+    "optimizations": [
+      "发现不进 issue：P2/P3 落 debt 册子（JSON）+ 看板，不开逐条单（防复发「43 张单」）",
+      "只有两样开单：SLA 超期条目、类级条目（一类一张单、零子单，单内写 N 处 + 名单）",
+      "类杀手环：同类反复出现 ⇒ 改规则/提示词/闸（出口 = 规则改了 + 该类新发生数=0），不逐个修实例",
+      "债的工作有预算上限（如每轮 ≤20% 产能）——不许债饿死主活，也不许无上限增长",
+      "自动过期：连续 N 轮没人碰 → 自动关 wontfix（带理由），登记册不许变馊",
+      "度量而非清单：按类型看数量/年龄趋势（进看板）"
+    ],
+    "practiceRef": {
+      "specKitty": "385 条发现 → 一张单零子单，只挑有正确性价值的子类挂已有归属单",
+      "warning": "无纪律的静态分析会变成 background noise"
+    }
+  }
+}
