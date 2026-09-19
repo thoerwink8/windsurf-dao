@@ -6,12 +6,12 @@
 // 幂等账与审计落 ~/.dao/issue-gateway（不进 git，换机不拷）。
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ghAs, loadRoleCreds } from './gh.mjs';
 
-export const ACTIONS = ['issue_create', 'issue_comment', 'issue_close', 'issue_reopen', 'issue_edit_labels', 'issue_milestone'];
+export const ACTIONS = ['issue_create', 'issue_comment', 'issue_comment_upsert', 'issue_close', 'issue_reopen', 'issue_edit_labels', 'issue_edit_title', 'issue_milestone'];
 export const MARSHAL_LOGIN = 'dao-marshal[bot]';
 export const MARSHAL_APP = 'app/dao-marshal';
 export const DEFAULT_ALLOWED_REPOS = [
@@ -210,6 +210,16 @@ export function validateRequest(req = {}) {
     if (!String(req.body || '').trim()) return fail('reject_input', 'comment 要 body');
     out.issue = issue;
     out.body = String(req.body);
+  } else if (action === 'issue_comment_upsert') {
+    // 有则改、无则发：认领靠 marker（T44 的视图评论必须能重生成，不许每轮刷一条新的）。
+    const issue = String(req.issue ?? '').trim();
+    if (!/^\d+$/.test(issue)) return fail('reject_input', 'comment-upsert 要 issue 号');
+    const marker = String(req.marker || '').trim();
+    if (!marker) return fail('reject_input', 'comment-upsert 要 marker（用来认领已发的那条）');
+    if (!String(req.body || '').trim()) return fail('reject_input', 'comment-upsert 要 body');
+    out.issue = issue;
+    out.marker = marker;
+    out.body = String(req.body);
   } else if (action === 'issue_close') {
     const issue = String(req.issue ?? '').trim();
     if (!/^\d+$/.test(issue)) return fail('reject_input', 'close 要 issue 号');
@@ -237,6 +247,13 @@ export function validateRequest(req = {}) {
     out.issue = issue;
     out.add = add;
     out.remove = remove;
+  } else if (action === 'issue_edit_title') {
+    const issue = String(req.issue ?? '').trim();
+    if (!/^\d+$/.test(issue)) return fail('reject_input', 'edit-title 要 issue 号');
+    const title = String(req.title || '').trim();
+    if (!title) return fail('reject_input', 'edit-title 要 title');
+    out.issue = issue;
+    out.title = title;
   }
   return { ok: true, request: out };
 }
@@ -388,8 +405,21 @@ function performReopen(req, deps) {
 }
 
 /** 把 issue 挂进里程碑（T30）。里程碑用标题或号都行——标题先查号（查不到=没查成，不猜）；
- *  挂完**回读自证**：回读的 milestone.number 必须等于挂的那个号，否则不算成。 */
+ *  挂完**回读自证**：回读的 milestone.number 必须等于挂的那个号，否则不算成。
+ *  `--milestone none` = 摘回 backlog（无里程碑），回读必须是 null。 */
 function performMilestone(req, deps) {
+  if (req.milestone === 'none') {
+    const payload = writePayload(deps, { milestone: null });
+    if (!payload.ok) return fail('payload', payload.error);
+    const r0 = runMarshal(['api', '-X', 'PATCH', `repos/${req.repo}/issues/${req.issue}`, '--input', payload.file], deps);
+    if (!r0 || !r0.ok) return fail('gh_write', `摘里程碑失败：${r0 && r0.error ? r0.error : '没查成'}`);
+    const viewed0 = readIssue(req.repo, req.issue, deps);
+    if (!viewed0.ok) return viewed0;
+    if (viewed0.json.milestone) {
+      return fail('incomplete_receipt', `摘了里程碑但回读还在「${viewed0.json.milestone.title || '?'}」`);
+    }
+    return { ok: true, action: req.action, repo: req.repo, number: Number(req.issue), url: viewed0.json.url || null, milestone: null, replay: false };
+  }
   let number = /^\d+$/.test(req.milestone) ? Number(req.milestone) : null;
   if (number === null) {
     const listed = runMarshal(['api', `repos/${req.repo}/milestones?state=all&per_page=100`], deps);
@@ -438,13 +468,79 @@ function performEditLabels(req, deps) {
   };
 }
 
+/** 正文走 `--input` 文件，不走 argv：正文可能很大，argv 会撞 E2BIG（#1363 实咬）。 */
+function writePayload(deps, obj) {
+  try {
+    const dir = deps.tmpDir || mkdtempSync(join(tmpdir(), 'gw-payload-'));
+    const file = join(dir, `payload-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(file, JSON.stringify(obj), { mode: 0o600 });
+    return { ok: true, file };
+  } catch (e) {
+    return { ok: false, error: `写 payload 失败：${String(e.message || e).slice(0, 120)}` };
+  }
+}
+
+/** 一条带 marker 的评论「有则改、无则发」：T44 的视图/索引要能重生成。回读自证：正文含 marker + 作者是 marshal。 */
+function performCommentUpsert(req, deps) {
+  const body = embedIdempotencyMarker(req.body, req.idempotency_key);
+  const listed = runMarshal(['api', `repos/${req.repo}/issues/${req.issue}/comments?per_page=100`], deps);
+  if (!listed || !listed.ok) return fail('gh_readback', `列评论没查成：${listed && listed.error ? listed.error : ''}`);
+  let arr;
+  try { arr = JSON.parse(String(listed.out || '[]')); } catch { return fail('gh_readback', '评论清单不是 JSON'); }
+  if (!Array.isArray(arr)) return fail('gh_readback', '评论清单不是数组');
+  // 认领**最新**那条（清单按时间升序）：视图重生成要覆盖上一次发的那条，不是最早那条。
+  const hit = [...arr].reverse().find((c) => c && typeof c.body === 'string' && c.body.includes(req.marker)) || null;
+
+  const payload = writePayload(deps, { body });
+  if (!payload.ok) return fail('payload', payload.error);
+  const args = hit
+    ? ['api', '-X', 'PATCH', `repos/${req.repo}/issues/comments/${hit.id}`, '--input', payload.file]
+    : ['api', '-X', 'POST', `repos/${req.repo}/issues/${req.issue}/comments`, '--input', payload.file];
+  const r = runMarshal(args, deps);
+  if (!r || !r.ok) return fail('gh_write', `comment-upsert 失败：${r && r.error ? r.error : '没查成'}`);
+
+  let out;
+  try { out = JSON.parse(String(r.out || '')); } catch { return fail('incomplete_receipt', 'upsert 回执不是 JSON'); }
+  if (!out || !out.id) return fail('incomplete_receipt', 'upsert 回执没有 comment id');
+  if (typeof out.body !== 'string' || !out.body.includes(req.marker)) {
+    return fail('incomplete_receipt', '回读评论正文里没有 marker——不算成');
+  }
+  const who = marshalAuthorOk(out.user || out.author);
+  if (who.unscanned) return fail('gh_readback', who.error, { url: out.html_url });
+  if (!who.ok) return fail('author_mismatch', who.error, { author: who.login, url: out.html_url });
+  return {
+    ok: true,
+    action: req.action,
+    repo: req.repo,
+    number: Number(req.issue),
+    commentId: String(out.id),
+    url: out.html_url || null,
+    author: who.login,
+    updated: !!hit,
+    replay: false,
+  };
+}
+
+/** 改标题（把标题里的手写分类前缀迁成标签后，标题要清干净）。回读自证：标题必须等于新标题。 */
+function performEditTitle(req, deps) {
+  const r = runMarshal(['issue', 'edit', req.issue, '--repo', req.repo, '--title', req.title], deps);
+  if (!r || !r.ok) return fail('gh_write', `edit-title 失败：${r && r.error ? r.error : '没查成'}`);
+  const viewed = readIssue(req.repo, req.issue, deps);
+  if (!viewed.ok) return viewed;
+  const got = String(viewed.json.title || '');
+  if (got !== req.title) return fail('incomplete_receipt', `标题回读是「${got.slice(0, 60)}」，不是新标题`);
+  return { ok: true, action: req.action, repo: req.repo, number: Number(req.issue), url: viewed.json.url || null, title: got, replay: false };
+}
+
 function perform(req, deps) {
   switch (req.action) {
     case 'issue_create': return performCreate(req, deps);
     case 'issue_comment': return performComment(req, deps);
+    case 'issue_comment_upsert': return performCommentUpsert(req, deps);
     case 'issue_close': return performClose(req, deps);
     case 'issue_reopen': return performReopen(req, deps);
     case 'issue_edit_labels': return performEditLabels(req, deps);
+    case 'issue_edit_title': return performEditTitle(req, deps);
     case 'issue_milestone': return performMilestone(req, deps);
     default: return fail('reject_input', `未知动作 ${req.action}`);
   }
@@ -509,10 +605,14 @@ export function applyIssueWrite(raw, deps = {}) {
   }
 
   const id = storeKey(req.action, req.repo, req.idempotency_key);
-  const hit = readStore(dir, id);
-  if (hit && hit.ok === false && hit.stage === 'idempotency_store') return finish(hit);
-  if (hit && hit.result && (hit.result.ok || hit.result.number)) {
-    return finish({ ...hit.result, replay: true });
+  // upsert 本身就是幂等的（有则改、无则发）：同一个键第二次必须**真去改**，不能被幂等账重放拦住——
+  // 否则「重新生成视图」永远发不出去（T44）。账照记，只是不拿它挡执行。
+  if (req.action !== 'issue_comment_upsert') {
+    const hit = readStore(dir, id);
+    if (hit && hit.ok === false && hit.stage === 'idempotency_store') return finish(hit);
+    if (hit && hit.result && (hit.result.ok || hit.result.number)) {
+      return finish({ ...hit.result, replay: true });
+    }
   }
 
   const creds = ensureCreds(deps);
@@ -541,6 +641,9 @@ export function issueCreate(fields, deps) {
 export function issueComment(fields, deps) {
   return applyIssueWrite({ ...fields, action: 'issue_comment' }, deps);
 }
+export function issueCommentUpsert(fields, deps) {
+  return applyIssueWrite({ ...fields, action: 'issue_comment_upsert' }, deps);
+}
 export function issueClose(fields, deps) {
   return applyIssueWrite({ ...fields, action: 'issue_close' }, deps);
 }
@@ -552,4 +655,7 @@ export function issueMilestone(fields, deps) {
 }
 export function issueEditLabels(fields, deps) {
   return applyIssueWrite({ ...fields, action: 'issue_edit_labels' }, deps);
+}
+export function issueEditTitle(fields, deps) {
+  return applyIssueWrite({ ...fields, action: 'issue_edit_title' }, deps);
 }
