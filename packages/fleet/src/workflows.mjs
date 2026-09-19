@@ -15,6 +15,7 @@ export async function fusionTaskWorkflow(input, options = {}) {
   let resumed = false;
   let cancelled = false;
   let transientRetries = 0;
+  let capacityWaits = 0;
   const scope = new CancellationScope();
   // 活动超时要覆盖 runSession 的最坏路径（首轮 stepTimeout + 宽限 + 收尾余量）。
   // 算术的唯一出处在 limits.mjs；宽限里不许再叠 sleep（复核实咬 P1：叠了就是 2×，
@@ -37,6 +38,17 @@ export async function fusionTaskWorkflow(input, options = {}) {
         state = await runFusionTask(task, activities, { previous, cancelled: () => cancelled, onState: value => { state = value; } });
         if (state.state !== 'blocked') return state;
         previous = state;
+        // 上游容量满：**长退避等待**（默认 5 分钟 × 12 = 1 小时），不吃那 5 次小退避预算——
+        // 容量是全队共享的资源条件，人插不了手，等它自己松（2026-09-19 实咬：relay 三模型同时满）。
+        if (state.failureClass === 'capacity') {
+          const capacityBudget = Number.isFinite(options.capacityWaitAttempts) ? options.capacityWaitAttempts : 12;
+          const capacityWaitSeconds = Number.isFinite(options.capacityWaitSeconds) ? options.capacityWaitSeconds : 300;
+          if (capacityWaits < capacityBudget) {
+            capacityWaits += 1;
+            await sleep(`${capacityWaitSeconds}s`);
+            continue;
+          }
+        }
         const transientBudget = state.failureClass === 'pending' ? 10 : 5;
         if ((state.failureClass === 'retryable' || state.failureClass === 'pending') && transientRetries < transientBudget) {
           transientRetries += 1;
