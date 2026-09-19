@@ -22,6 +22,15 @@
     "per_issue": { "review_rounds_max": 6, "worker_wall_hours_max": 4, "on_exceed": "停手，发总控群卡片上报" },
     "per_day": { "dispatch_max": 20, "on_exceed": "排队到次日" }
   },
+  "retire": {
+    "_comment": "落后单机械清退（#1503，用户 2026-09-19「以后落后都要有机制清退，而不是人工肉眼」）：闲置超 warnIdleDays 进「待清退」名单，已带该标签且超 retireIdleDays 就关 wontfix。豁免：挂「将来某版」/ P0 在做 / 有在途 PR 认领 / 容器单。",
+    "warnIdleDays": 14,
+    "retireIdleDays": 30,
+    "label": "待清退",
+    "exemptMilestones": ["将来某版"],
+    "exemptPriorities": ["priority/P0"],
+    "exemptIssues": [816, 1460]
+  },
   "demo": {
     "windsurf-dao": { "kind": "scripts", "evidence": "dao-check 输出 + 测试计数" },
     "ai-gateway-stack": { "kind": "server-config", "evidence": "部署脚本日志 + machine-check 全绿" },

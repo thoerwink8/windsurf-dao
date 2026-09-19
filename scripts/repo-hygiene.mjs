@@ -53,6 +53,18 @@ function prBacklog() {
   return { open: list.map(p => ({ number: p.number, mergeable: p.mergeable, ageDays: (now - Date.parse(p.createdAt)) / 86400000 })) };
 }
 
+// #1503：落后单清退。不重造判据——调 issue-retire 自己（它是机械判）。它红时退出码 1，
+// 但 stdout 仍是合法 JSON，所以先看能不能解析，别把「有该清退的」洗成「没查成」。
+function issueRetire() {
+  const r = run(process.execPath, [join(ROOT, 'scripts', 'issue-retire.mjs'), '--json']);
+  let doc;
+  try { doc = JSON.parse(String(r.stdout || '')); } catch {
+    return { state: 'unscanned', why: `issue-retire 没查成（${String(r.stderr || r.stdout || '').trim().slice(0, 100)}）` };
+  }
+  if (!doc || !doc.verdict) return { state: 'unscanned', why: 'issue-retire 回执形态不对' };
+  return { state: doc.verdict.state, why: doc.verdict.why };
+}
+
 // T44：版本视图/伞单索引与 GitHub 状态是否一致。不重造检查器——调 stage-board 自己（它已是机械判据）。
 // 它红时退出码是 1，但 stdout 仍是合法 JSON，所以先看能不能解析，别把「有红」洗成「没查成」。
 function stageBoard() {
@@ -99,6 +111,7 @@ function main() {
   const backlog = prBacklog();
   checks.push({ id: 'pr-backlog', kind: 'PR 积压', verdict: backlog.state ? backlog : judgePrBacklog({ open: backlog.open, ...HYGIENE_DEFAULTS }) });
 
+  checks.push({ id: 'issue-retire', kind: '落后单清退', verdict: issueRetire() });
   checks.push({ id: 'stage-board', kind: '阶段盘面', verdict: stageBoard() });
 
   const summary = summarizeHygiene(checks.map(c => c.verdict));
