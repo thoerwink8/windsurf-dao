@@ -273,6 +273,17 @@ async function makeActivities() {
     runtime,
     projects: PROJECTS,
     gh: ghAs,
+    // T39 阶梯③：换腿候选（**同 family**，由 alternateProfiles 保证）——取不到就空，不挡主腿。
+    alternatesOf: async ({ role, primary }) => {
+      const { chooseLeg, loadLegChoiceData } = await import('../../../scripts/lib/leg-choice.mjs');
+      const { alternateProfiles } = await import('./legs.mjs');
+      const data = loadLegChoiceData({});
+      const result = chooseLeg({
+        profiles: data.profiles, role, health: data.health, breaker: data.breaker,
+        headroom: data.headroom, history: data.history, now: Date.now(),
+      });
+      return alternateProfiles({ candidates: result.candidates, primary });
+    },
     git: gitRun,
     installDeps: async workdir => {
       const target = join(workdir, 'packages', 'fleet');
