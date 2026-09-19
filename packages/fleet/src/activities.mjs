@@ -332,7 +332,12 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     },
     async closeIssue(task, delivery) {
       if (typeof closeIssue !== 'function') throw fail('UNSUPPORTED_CAPABILITY', 'no issue closer configured');
-      return closeIssue({ task, delivery });
+      // 关单失败（含「回读 CLOSED 失败」）要判成**可重试**：网关是幂等的（同一 idempotency-key），
+      // 重试不会重复关单。否则一次瞬时读失败就把闭环停在 closing（g4 实咬：issue 已 CLOSED，
+      // 只是回读抖了一下，却被判 unscanned 停手）。
+      return closeIssue({ task, delivery }).catch(error => {
+        throw asTransientFailure(error, 'closeIssue') || fail('SERVICE_UNAVAILABLE', `close issue failed: ${String(error?.message || error).slice(0, 160)}`);
+      });
     },
     async cleanup(task, { checkpoint }) {
       if (!checkpoint) return { verified: true, skipped: 'no workspace' };
