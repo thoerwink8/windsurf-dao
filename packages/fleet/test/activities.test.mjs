@@ -218,6 +218,44 @@ describe('activities bind the workflow to real systems', () => {
     assert.ok(ghCalls.length > 0, '一次 gh 调用都没记到 = 没查成');
     assert.equal(ghCalls.every(call => typeof call[call.length - 1] === 'string' && call[call.length - 1].length > 0), true, 'gh 调用必须带 role');
   });
+  it('起会话前按租约收树：等待中的占用者被显式停掉（不靠会抖的名单）', async () => {
+    const stopped = [];
+    const { activities } = harness({
+      runtime: {
+        leaseOf: () => ({ ok: true, lease: { sessionKey: 'session-stuck', state: 'waiting_user' } }),
+        stopSession: async key => { stopped.push(key); return { ok: true }; },
+        readSession: async () => text('```json\n{"plan":"P"}\n```'),
+      },
+    });
+    await activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 });
+    assert.equal(stopped.includes('session-stuck'), true, '租约上的占用者必须被停掉');
+  });
+  it('租约读不到 → 不放行（没查成 ≠ 树是干净的）', async () => {
+    const { activities } = harness({ runtime: { leaseOf: () => ({ ok: false, why: 'EACCES' }) } });
+    await assert.rejects(activities.lead(task, { prepared: { checkpoint: '/trees/b' }, round: 0 }), error => error?.type === 'SERVICE_UNAVAILABLE');
+  });
+  it('审查树撞「未注册占位」→ 有界复位（派生物，允许拆掉重建）', async () => {
+    let ensured = 0;
+    const { activities, calls } = harness({
+      runtime: {
+        ensureWorkspace: async () => { ensured += 1; if (ensured === 1) throw new Error('unregistered worktree path already exists: /trees/stale'); return { path: '/trees/review' }; },
+        readSession: async () => text('```json\n{"findings":[]}\n```'),
+      },
+      git: async args => (args[0] === 'worktree' ? { status: 0, out: '' } : { status: 0, out: H }),
+    });
+    const result = await activities.review(task, { head: H, checkpoint: '/trees/b', pr: 19 }, { checks: {} });
+    assert.equal(ensured, 2, '复位后要重建一次');
+    assert.equal(result.completed, true);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'worktree' && rest[1] === 'remove'), true, '要拆掉残留树');
+  });
+  it('任务树撞占位但树上有提交 → 停手报人（不删产出）', async () => {
+    const { activities, calls } = harness({
+      runtime: { ensureWorkspace: async () => { throw new Error('unregistered worktree path already exists: /trees/stale'); } },
+      git: async args => (args[0] === 'log' ? { status: 0, out: 'abc123 feat: x\n' } : { status: 0, out: H }),
+    });
+    await assert.rejects(activities.prepare(task), /workspace reset refused/);
+    assert.equal(calls.some(([kind, ...rest]) => kind === 'git' && rest[0] === 'worktree' && rest[1] === 'remove'), false, '有产出就不许拆');
+  });
   it('接手时停不掉会话 → 不接手，报释放未核实', async () => {
     const { activities, calls } = harness({
       git: async (args) => (args[0] === 'rev-parse' ? { status: 0, out: H } : { status: 0, out: '' }),

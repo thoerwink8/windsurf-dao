@@ -1,0 +1,39 @@
+# /etc/systemd/system/dao-repo-hygiene.service
+#
+# 仓库卫生巡检（用户 2026-09-19：「主分支都有待合入或待拉取的，应该要有制度保证」）：
+# 跑 scripts/repo-hygiene.mjs —— 本机仓的未推/未拉 + 声明的其它仓与机器 + PR 积压（数量/年龄/冲突）。
+#
+# 为什么要有它（实测三件事，都是靠人偶然发现的）：
+#   · 服务器上的 ai-gateway-stack 有 2 笔改动躺了 9 天没推；
+#   · 本机主树落后 39 笔（跑的是旧码）；
+#   · 开放 PR 积到 17 个，最老 14.6 天（审查容量被旧账吃掉）。
+#
+# 退出码：0 = 全绿；1 = 有红或有「没查成」。**「没查成」也留成失败**——连不上机器、
+# gh 取不到数，跟「查过没事」不许长成一个样。
+#
+# 装法：sudo bash scripts/install-repo-hygiene.sh
+# 验：systemctl list-timers 里 dao-repo-hygiene.timer 的 NEXT 必须是时间；
+#     journalctl -u dao-repo-hygiene -n 30 -o cat 看三态报告
+#
+# User=orca 是硬要求：ExecStart 指进 /srv/projects/windsurf-dao，那个仓每个执行体都能写。
+
+[Unit]
+Description=windsurf-dao 仓库卫生巡检（未推/未拉 + PR 积压）
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=orca
+Group=orca
+WorkingDirectory=/srv/projects/windsurf-dao
+Environment=PATH=/home/orca/.local/bin:/home/orca/bin:/usr/local/bin:/usr/bin:/bin
+UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
+Environment=GH_CONFIG_DIR=/var/empty
+# 声明的其它本机仓（逗号分隔）与远端机器（JSON 数组；ssh 别名要能免密登）。
+# 单引号是必需的：systemd 会剥掉 Environment= 里的双引号（2026-09-19 实咬，#1463）。
+Environment=DAO_HYGIENE_REPOS=/srv/projects/ai-gateway-stack
+Environment='DAO_HYGIENE_MACHINES=[]'
+ExecStart=/usr/bin/node /srv/projects/windsurf-dao/scripts/repo-hygiene.mjs
+SuccessExitStatus=0
+StandardOutput=journal
+StandardError=journal

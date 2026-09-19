@@ -727,6 +727,19 @@ export function createExecutionRuntime(opts={}) {
     return startSession({profileId:m.profileId,agent:m.agent,model:m.requestedModel||m.model,provider:m.provider,accountPoolId:m.accountPoolId,route:m.route,backend:m.backend,workdir:m.workdir,prompt,taskId:m.taskId,issue:m.issue,pr:m.pr,title:m.title,resumeFrom:key});
   }
   return {startSession,readSession,listSessions,stopSession,waitForCompletion,config:mirasim.config,
+    /** 读某棵树的租约（谁占着它）。给「起会话前先收本树」用：**不靠会话名单**——
+     *  名单会抖（listSessions ok:false 时整段空操作），租约文件本身写着占用者的 sessionKey。
+     *  三态：{ok:true, lease} / {ok:true, lease:null}（没租约）/ {ok:false, why}（没查成）。 */
+    leaseOf:workdir=>{
+      try{
+        const file=leaseFile(fs.realpathSync(workdir));
+        const held=readJson(file);
+        return {ok:true,lease:held||null};
+      }catch(e){
+        if(e?.code==='ENOENT')return {ok:true,lease:null};
+        return {ok:false,why:String(e?.message||e).slice(0,120)};
+      }
+    },
     profileForModel:model=>{const matches=profiles.filter(p=>p.id===model||p.defaultForModels?.includes(model));if(matches.length>1)throw new Error('ambiguous model profile');return matches[0]||null;},
     ensureWorkspace:async(repo,branch)=>{
       assertExecutorIsolation();

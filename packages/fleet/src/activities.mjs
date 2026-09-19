@@ -131,6 +131,41 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     }
     return { ok: stopped.every(item => item.ok), stopped };
   };
+  /** 起会话前先收本树（T4）：**不靠会话名单**——名单会抖（`listSessions ok:false` 时旧写法整段
+   *  空操作，2026-09-19 实咬多次），而租约文件本身写着占用者。等待中/未定的会话在这里被**显式停掉**：
+   *  `stopSession` 不带 automatic——带 automatic 会以「会话在等人」拒绝，而无人值守链路上没人会来答。
+   *  三态：收到 / 没租约 / 没查成（没查成不许当「树是干净的」，fail-closed 交上层重试）。 */
+  const releaseStuckTree = async workdir => {
+    if (typeof runtime.leaseOf !== 'function') return { ok: true, skipped: 'runtime has no leaseOf' };
+    const lease = runtime.leaseOf(workdir);
+    if (lease?.ok !== true) return { ok: false, why: lease?.why || 'lease unreadable' };
+    const key = lease.lease?.sessionKey;
+    if (!key) return { ok: true, none: true };
+    const stopped = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
+    return stopped?.ok === true ? { ok: true, stopped: key } : { ok: false, why: `stop ${key}: ${String(stopped?.why || '').slice(0, 100)}` };
+  };
+
+  /** 有界树复位（T4）：`ensureWorkspace` 撞上「未注册占位」时，只有在**能证明没有产出**时才允许
+   *  把树拆掉重建——审查树是派生物（无产出）；任务树只在「master 之上没有提交」时才允许。
+   *  有产出一律停手报人：删产出比卡住更糟。 */
+  const ensureTree = async (repo, branch, { derived = false } = {}) => {
+    try {
+      return await runtime.ensureWorkspace(repo, branch);
+    } catch (error) {
+      const why = String(error?.message || error);
+      if (!/unregistered worktree path already exists/.test(why)) throw error;
+      const stale = why.split('already exists:').pop().trim();
+      if (!derived) {
+        const ahead = await git(['log', 'origin/master..HEAD', '--oneline'], { cwd: stale }).catch(() => ({ status: 1, out: '' }));
+        if (gitOk(ahead) && String(ahead.out || '').trim()) throw fail('UNSUPPORTED_CAPABILITY', `workspace reset refused: stale tree has commits beyond master（${stale}）`);
+      }
+      const removed = await git(['worktree', 'remove', '--force', stale], { cwd: repo });
+      if (!gitOk(removed)) throw fail('SERVICE_UNAVAILABLE', `stale worktree remove failed: ${String(removed?.err || '').slice(0, 120)}`);
+      await git(['worktree', 'prune'], { cwd: repo });
+      return await runtime.ensureWorkspace(repo, branch);
+    }
+  };
+
   /** 执行体抛的瞬时故障（租约/渠道背压、维护窗、启动未定）在这一层统一转成带类型的可重试失败，
    *  否则过界后类型丢失、被判定层按 unscanned 停手等人（g4 实咬）。 */
   const runSession = async (task, workdir, prompt, role) => {
@@ -145,6 +180,9 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     let started;
     // 起会话前先收本树：上一次失败的启动/未终态的会话会让租约闸判「已有活跃或未知会话」而拒绝，
     // 于是可重试的瞬时故障变成死循环（真跑实咬两轮）。同一任务同一棵树里同时只有一个会话，先收是安全的。
+    // 先按**租约**收树（确定性）：等待中/未定的占用者在这里被显式停掉——名单会抖，租约不会。
+    const freed = await releaseStuckTree(workdir).catch(error => ({ ok: false, why: String(error?.message || error) }));
+    if (freed?.ok !== true) throw fail("SERVICE_UNAVAILABLE", `worktree lease release unverified: ${String(freed?.why || "").slice(0, 120)}`);
     await reapWorkdirSessions(workdir).catch(() => {});
     try {
       started = await runtime.startSession({ profileId: profile.profile, agent: profileMeta(profile.profile)?.agent, model: profile.profile, workdir, prompt, taskId: task.id, title: `${task.id} ${role}` });
@@ -228,7 +266,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     async prepare(task) {
       const repo = projectPath(task.repository);
       const branch = branchOf(task);
-      const tree = await runtime.ensureWorkspace(repo, branch);
+      const tree = await ensureTree(repo, branch);
       if (!tree?.path) throw fail('SERVICE_UNAVAILABLE', 'workspace not created');
       // 提交身份由系统设：让会话自己跑 gh-as 是白名单外命令，会卡在权限提问（g9 实咬）。
       if (typeof gitIdentity === 'function') { try { await gitIdentity(tree.path); } catch { /* 设不上不挡开工：身份另有核对 */ } }
@@ -305,7 +343,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
       const reviewerFamily = profileMeta(task.roles.reviewer.profile)?.family || null;
       const repo = projectPath(task.repository);
       const reviewBranch = `dao/review-${task.issue}-g${task.generation}-${artifact.head.slice(0, 12)}`;
-      const tree = await runtime.ensureWorkspace(repo, reviewBranch);
+      const tree = await ensureTree(repo, reviewBranch, { derived: true });
       const fetched = await git(['fetch', 'origin', `refs/heads/${branchOf(task)}`], { cwd: tree.path });
       if (!gitOk(fetched)) throw fail('SERVICE_UNAVAILABLE', 'review fetch failed');
       const checkedOut = await git(['checkout', '--detach', artifact.head], { cwd: tree.path });
