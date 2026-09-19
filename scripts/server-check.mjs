@@ -29,6 +29,7 @@ import { classifyLandTimer, LAND_TIMER } from './lib/land-automation.mjs';
 import { classifyReconcile, parseUsageNdjson } from './lib/model-reconcile.mjs';
 import { classifyGhEventBridge } from './lib/gh-events.mjs';
 import { combineNextElapse, hasNextElapse } from './lib/timer-armed.mjs';
+import { readSelfCheckRecord } from './lib/self-check-ledger.mjs';
 
 const HERE = fileURLToPath(import.meta.url);
 const REPO_ROOT = resolve(dirname(HERE), '..');
@@ -105,21 +106,40 @@ function checkLandAutomation() {
   return { state: r.state, detail: r.detail, count: r.count };
 }
 
-/** ⑪ 嵌套预算（#984）：dao.test 缩时后 dao-check 只要 ~15s，60s 够盖住余量。
- *  超了本身就是要报的病，不是要等的事（600s/180s 都把调用方拖过 SIGKILL）。 */
-export const DAO_CHECK_NESTED_TIMEOUT_MS = 60_000;
+/**
+ * ⑪ 仓库自检——读账不重跑（2026-09-20）。
+ * 原来是嵌套再跑一遍 dao-check、60s 预算（#984，前提「dao-check ~15s」）；前提烂了（服务器实跑 91s）
+ * 之后 ⑪ 几周来每次都是「超时 → unknown」：烧 60 秒、零信息，还把真红盖成没查成。
+ * 现在：dao-check 自己在出口写账（scripts/lib/self-check-ledger.mjs），服务器上 server-sync.sh
+ * 每轮用 scripts/self-check-if-changed.mjs 在 HEAD 变化时跑一次。⑪ 只读账，判据是**账上的 head
+ * 等于本树当前 HEAD**——对不上就是「自检还没跟上这次合并」（unknown），不按时间判陈旧。
+ * 只读账文件，不解析 dao-check 的输出（不复用被检查对象的解析逻辑）。
+ */
+export function classifyRepoSelfCheck({ probed = false, reason = '', record = null, head = '' } = {}) {
+  if (!head) return { state: UNKNOWN, detail: `读不到本树 HEAD：${reason || ''}` };
+  if (!probed) return { state: UNKNOWN, detail: `自检账没读到：${reason || ''}——服务器上由 server-sync 的 self-check-if-changed 写；本机手跑一次 node scripts/dao-check.mjs 也会写` };
+  const rHead = String(record.head || '');
+  const when = String(record.ts || '?').replace('T', ' ').slice(0, 19);
+  if (rHead !== head) {
+    return { state: UNKNOWN, detail: `自检账停在 ${rHead.slice(0, 7) || '?'}（${when}），本树已到 ${head.slice(0, 7)}——自检还没跟上这次合并，不是绿` };
+  }
+  const took = Number.isFinite(record.ms) ? `${Math.round(record.ms / 1000)}s` : '?s';
+  if (record.code !== 0) {
+    return { state: RED, count: record.red ?? null, detail: `dao-check 在 ${head.slice(0, 7)} 上红 ${record.red ?? '?'} 项（${when}，${took}）——跑 node scripts/dao-check.mjs 看红项` };
+  }
+  return { state: OK, count: 0, detail: `dao-check 在 ${head.slice(0, 7)} 上绿（${when}，${took}，${record.green ?? '?'} 项）` };
+}
 
-/** 嵌套跑仓库自检：只取退出码，不解析它的输出（不复用被检查对象的解析逻辑）。 */
 function checkRepoSelfCheck() {
-  const t0 = Date.now();
-  const r = run(process.execPath, [join(REPO_ROOT, 'scripts', 'dao-check.mjs')], {
-    timeout: DAO_CHECK_NESTED_TIMEOUT_MS,
+  const h = run('git', ['-C', REPO_ROOT, 'rev-parse', 'HEAD'], { timeout: 10000 });
+  const head = h.probed && h.code === 0 ? String(h.stdout || '').trim() : '';
+  const ledger = readSelfCheckRecord(REPO_ROOT);
+  return classifyRepoSelfCheck({
+    probed: ledger.probed,
+    reason: head ? ledger.reason : (h.reason || (h.stderr || '').trim().slice(0, 120)),
+    record: ledger.record,
+    head,
   });
-  const ms = Date.now() - t0;
-  const took = `dao-check 自己 ${ms}ms`;
-  if (!r.probed) return { state: UNKNOWN, detail: `dao-check 没跑成：${r.reason}（${took}）` };
-  if (r.code !== 0) return { state: RED, detail: `dao-check 退出 ${r.code}（跑 node scripts/dao-check.mjs 看红项；${took}）` };
-  return { state: OK, detail: `dao-check 退出 0（${took}）` };
 }
 
 /** #802：检查器自己扫 TOML 文本，不 import launch.mjs / agent-ready.mjs。 */
@@ -1533,6 +1553,15 @@ function selfTest() {
   if (noCatalog.state !== UNKNOWN) {
     failures.push(`没扫到目录应判 unknown，实际 ${noCatalog.state}`);
   }
+
+  // ⑪（读账版）：账上 head 落后本树必须 unknown（不是绿）；账上 code≠0 必须红；没账必须 unknown。
+  const H = 'a'.repeat(40);
+  const behind = classifyRepoSelfCheck({ probed: true, head: H, record: { head: 'b'.repeat(40), code: 0, ts: '2026-09-20T00:00:00Z' } });
+  if (behind.state !== UNKNOWN) failures.push(`自检账落后本树 HEAD 应判 unknown，实际 ${behind.state}`);
+  const redLedger = classifyRepoSelfCheck({ probed: true, head: H, record: { head: H, code: 1, red: 3, ts: '2026-09-20T00:00:00Z' } });
+  if (redLedger.state !== RED || redLedger.count !== 3) failures.push(`账上红 3 项应判 red/3，实际 ${redLedger.state}/${redLedger.count}`);
+  if (classifyRepoSelfCheck({ probed: false, reason: 'ENOENT', head: H }).state !== UNKNOWN) failures.push('没账应判 unknown');
+  if (classifyRepoSelfCheck({ probed: true, head: H, record: { head: H, code: 0, ts: '2026-09-20T00:00:00Z' } }).state !== OK) failures.push('账上同 HEAD 且 code 0 应判 ok');
 
   // ㉕：故意造「窗口内有一条 non-cc-client」必须红；空日志/日志读不到必须 unknown，不许当 0 条。
   const nowIso = new Date();

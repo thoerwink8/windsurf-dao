@@ -8,6 +8,7 @@
 | os.homedir() | 代码 API 形态，不是新品类；join(homedir(), ...) 已收到 ~/.dao / ~/.pi |
 | ~/.brand-new-cli | 回归夹具，故意不进 INDEX，只给闸验「漏写新家目录必须红」 |
 | ~/.dao/server-check | server-check（NEW-MACHINE §9d）落盘目录，运行时自建，非产品配置；刻意在仓外——检查器的输出不许落进它自己会读的范围 |
+| ~/.dao/dao-check | 仓库自检账（`scripts/lib/self-check-ledger.mjs`，2026-09-20）：dao-check 出口写一条 `{ts,root,head,code,ms,red,green,skip}`，一树一文件；server-check ⑪ 只读它不重跑。运行时自建、可丢可重算（下一次 dao-check 重写），派生数据不进 git |
 | ~/.dao/commander | 服务器指挥官（#800）落盘目录：态势 situation-*.json / state.json / 报帅 body。运行时自建，非产品配置；与 ~/.dao/server-check 同性质，刻意在仓外（眼睛的输出不落进自己会读的范围） |
 | ~/.agent-stall-watch.json | 撞死指纹垫片文件（#807/#833 退役）：正式连红账本是 ~/.dao/agent-stall-watch.json，指挥官/熔断都读那里。本路径落地即删，不进 INDEX 不当产品落点 |
 | ~/.dao/feishu-threads.json | 飞书适配器（#801）话题状态文件，运行时自建，非产品配置，可丢可重算 |

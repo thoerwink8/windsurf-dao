@@ -617,7 +617,7 @@ cd /srv/projects/windsurf-dao && node scripts/onboard.mjs
 
 # ② 单元：一圈常驻单元各有一个 install-*.sh（编排面是 install-fleet.sh）
 sudo bash scripts/install-fleet.sh          # dao-fleet-temporal + dao-fleet-worker
-sudo bash scripts/install-dao-sync.sh       # 主树跟 origin/master
+sudo bash scripts/install-dao-sync.sh       # 主树跟 origin/master；每轮尾巴 HEAD 变了才跑一次 dao-check 记账（~/.dao/dao-check/，server-check ⑪ 读账不重跑，2026-09-20）
 sudo bash scripts/install-land.sh           # 收工推主分支
 # …其余按需（ls scripts/install-*.sh 是全集；每个脚本头部写了自己装什么、怎么验）
 
