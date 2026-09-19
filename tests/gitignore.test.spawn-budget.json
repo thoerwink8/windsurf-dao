@@ -1,0 +1,4 @@
+{
+  "budget": 7,
+  "why": "判据就是「真问一次 git check-ignore」——进程内跑等于不验（ignore 规则由 git 解释）。7 处：4 个必须被 ignore 的路径 + 1 个自动产物 + 2 个不许被误 ignore 的源文件。"
+}
