@@ -1,0 +1,4 @@
+{
+  "budget": 11,
+  "why": "onboard CLI 黑盒：整目录劫持 e2e 与退出码。进程内跑等于不验 CLI 边界。"
+}

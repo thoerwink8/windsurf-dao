@@ -1,0 +1,4 @@
+{
+  "budget": 10,
+  "why": "reviewer-create / worker-done CLI 与真 git 树黑盒。进程内跑会共享模块状态。"
+}
