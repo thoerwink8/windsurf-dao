@@ -103,7 +103,7 @@ export const INVENTORY = [
   { id: 'cli:codex', group: '执行体', why: 'codex 腿（npm 全局 @openai/codex）', how: 'NEW-MACHINE §7e 一带', probe: probeCommand('codex', ['--version']) },
   { id: 'cli:grok', group: '执行体', why: 'grok 腿（npm 全局 @xai-official/grok）', how: 'NEW-MACHINE §7', probe: probeCommand('grok', ['--version']) },
   { id: 'cli:pi', group: '执行体', why: 'pi 腿（npm 全局 @earendil-works/pi-coding-agent）', how: 'NEW-MACHINE §6', probe: probeCommand('pi', ['--version']) },
-  { id: 'cli:command-code', group: '执行体', why: 'command-code 腿（npm 全局）', how: 'NEW-MACHINE §7b', probe: probeCommand('command-code', ['--version']) },
+  { id: 'cli:command-code', group: '执行体', why: 'commandcode 腿（npm 全局；**长名 command-code 没建链接**，实际 cli 是 cmdc）', how: 'NEW-MACHINE §7b', probe: probeCommand('cmdc', ['--version']) },
   { id: 'shim:cursor-agent', group: '执行体', why: 'cursor 腿（ACP；不在 PATH，靠 ~/.local/bin shim + versions 目录）', how: 'NEW-MACHINE §7c', probe: probeFile('.local/bin/cursor-agent') },
   { id: 'shim:devin', group: '执行体', why: 'devin 腿（ACP，同上）', how: 'NEW-MACHINE §7d', probe: probeFile('.local/bin/devin') },
   { id: 'shim:reclaude', group: '执行体', why: 'claude 腿**必须**经 reclaude（裸 claude 会 login rejected）', how: '全局约定「模型偏好」节', probe: probeFile('.local/bin/reclaude') },
@@ -112,7 +112,7 @@ export const INVENTORY = [
 
   // ── 工具 ──
   { id: 'tool:uv', group: '工具', why: '跑 uv 工具（ddgs 等）', how: 'NEW-MACHINE §13a', probe: probeCommand('uv', ['--version']) },
-  { id: 'tool:ddgs', group: '工具', why: '查资料的搜索 CLI（WebSearch 卡住时的本机路）', how: 'NEW-MACHINE §13a', probe: probeCommand('ddgs', ['--version']) },
+  { id: 'tool:ddgs', group: '工具', why: '查资料的搜索 CLI（WebSearch 卡住时的本机路；没有 --version，用 --help 判）', how: 'NEW-MACHINE §13a', probe: probeCommand('ddgs', ['--help']) },
   { id: 'tool:temporal', group: '工具', why: 'fleet 的 Temporal CLI（版本要钉死，装法在 install-fleet.sh）', how: 'scripts/install-fleet.sh', probe: probeCommand('temporal', ['--version']) },
   { id: 'tool:lark-cli', group: '工具', why: '飞书 CLI（问答卡/通知走它）', how: 'ai-gateway-stack', probe: probeFile('.local/share/lark-cli') },
 
