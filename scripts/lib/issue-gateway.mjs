@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { ghAs, loadRoleCreds } from './gh.mjs';
 
-export const ACTIONS = ['issue_create', 'issue_comment', 'issue_close', 'issue_reopen', 'issue_edit_labels'];
+export const ACTIONS = ['issue_create', 'issue_comment', 'issue_close', 'issue_reopen', 'issue_edit_labels', 'issue_milestone'];
 export const MARSHAL_LOGIN = 'dao-marshal[bot]';
 export const MARSHAL_APP = 'app/dao-marshal';
 export const DEFAULT_ALLOWED_REPOS = [
@@ -221,6 +221,13 @@ export function validateRequest(req = {}) {
     if (!/^\d+$/.test(issue)) return fail('reject_input', 'reopen 要 issue 号');
     out.issue = issue;
     out.comment = req.comment == null ? '' : String(req.comment);
+  } else if (action === 'issue_milestone') {
+    const issue = String(req.issue ?? '').trim();
+    if (!/^\d+$/.test(issue)) return fail('reject_input', 'milestone 要 issue 号');
+    const milestone = String(req.milestone ?? '').trim();
+    if (!milestone) return fail('reject_input', 'milestone 要里程碑标题或号');
+    out.issue = issue;
+    out.milestone = milestone;
   } else if (action === 'issue_edit_labels') {
     const issue = String(req.issue ?? '').trim();
     if (!/^\d+$/.test(issue)) return fail('reject_input', 'edit-labels 要 issue 号');
@@ -258,7 +265,7 @@ function parseJsonOut(r, stage, what) {
 }
 
 function readIssue(repo, number, deps) {
-  const r = runMarshal(['issue', 'view', String(number), '--repo', repo, '--json', 'number,url,title,state,author,labels,closedAt'], deps);
+  const r = runMarshal(['issue', 'view', String(number), '--repo', repo, '--json', 'number,url,title,state,author,labels,closedAt,milestone'], deps);
   return parseJsonOut(r, 'gh_readback', `回读 issue #${number}`);
 }
 
@@ -380,6 +387,28 @@ function performReopen(req, deps) {
   };
 }
 
+/** 把 issue 挂进里程碑（T30）。里程碑用标题或号都行——标题先查号（查不到=没查成，不猜）；
+ *  挂完**回读自证**：回读的 milestone.number 必须等于挂的那个号，否则不算成。 */
+function performMilestone(req, deps) {
+  let number = /^\d+$/.test(req.milestone) ? Number(req.milestone) : null;
+  if (number === null) {
+    const listed = runMarshal(['api', `repos/${req.repo}/milestones?state=all&per_page=100`], deps);
+    if (!listed || !listed.ok) return fail('gh_readback', `查里程碑没查成：${listed && listed.error ? listed.error : ''}`);
+    let parsed;
+    try { parsed = JSON.parse(listed.out || '[]'); } catch { return fail('gh_readback', '里程碑清单不是 JSON'); }
+    const hit = Array.isArray(parsed) ? parsed.find((m) => m && m.title === req.milestone) : null;
+    if (!hit) return fail('reject_input', `没有标题为「${req.milestone}」的里程碑（不猜，先建）`);
+    number = hit.number;
+  }
+  const r = runMarshal(['api', '-X', 'PATCH', `repos/${req.repo}/issues/${req.issue}`, '-F', `milestone=${number}`], deps);
+  if (!r || !r.ok) return fail('gh_write', `挂里程碑失败：${r && r.error ? r.error : '没查成'}`);
+  const viewed = readIssue(req.repo, req.issue, deps);
+  if (!viewed.ok) return viewed;
+  const got = viewed.json.milestone ? Number(viewed.json.milestone.number) : null;
+  if (got !== number) return fail('incomplete_receipt', `挂的是 #${number}，回读是 ${got === null ? '空' : '#' + got}`);
+  return { ok: true, action: req.action, repo: req.repo, number: Number(req.issue), url: viewed.json.url || null, milestone: viewed.json.milestone.title || null, replay: false };
+}
+
 function performEditLabels(req, deps) {
   const args = ['issue', 'edit', req.issue, '--repo', req.repo];
   for (const l of req.add) args.push('--add-label', l);
@@ -416,6 +445,7 @@ function perform(req, deps) {
     case 'issue_close': return performClose(req, deps);
     case 'issue_reopen': return performReopen(req, deps);
     case 'issue_edit_labels': return performEditLabels(req, deps);
+    case 'issue_milestone': return performMilestone(req, deps);
     default: return fail('reject_input', `未知动作 ${req.action}`);
   }
 }
@@ -516,6 +546,9 @@ export function issueClose(fields, deps) {
 }
 export function issueReopen(fields, deps) {
   return applyIssueWrite({ ...fields, action: 'issue_reopen' }, deps);
+}
+export function issueMilestone(fields, deps) {
+  return applyIssueWrite({ ...fields, action: 'issue_milestone' }, deps);
 }
 export function issueEditLabels(fields, deps) {
   return applyIssueWrite({ ...fields, action: 'issue_edit_labels' }, deps);
