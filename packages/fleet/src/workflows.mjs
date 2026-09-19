@@ -1,6 +1,7 @@
 import { ApplicationFailure, CancellationScope, condition, defineQuery, defineSignal, isCancellation, proxyActivities, setHandler, sleep } from '@temporalio/workflow';
 import { normalizeTask } from './contract.mjs';
 import { runFusionTask } from './runner.mjs';
+import { activityBudgetSeconds, DEFAULT_UNKNOWN_WAIT_MS, DEFAULT_UNKNOWN_WAIT_ROUNDS } from './limits.mjs';
 
 export const statusQuery = defineQuery('status');
 export const resumeSignal = defineSignal('resume');
@@ -15,8 +16,13 @@ export async function fusionTaskWorkflow(input, options = {}) {
   let cancelled = false;
   let transientRetries = 0;
   const scope = new CancellationScope();
+  // 活动超时要覆盖 runSession 的最坏路径（首轮 stepTimeout + 宽限 + 收尾余量）。
+  // 算术的唯一出处在 limits.mjs；宽限里不许再叠 sleep（复核实咬 P1：叠了就是 2×，
+  // 预算少算一半，Temporal 会在停会话之前掐死活动，原阻塞 2 会复活）。
+  const unknownWaitMs = Number.isFinite(options.unknownWaitMs) ? options.unknownWaitMs : DEFAULT_UNKNOWN_WAIT_MS;
+  const unknownWaitRounds = Number.isFinite(options.unknownWaitRounds) ? options.unknownWaitRounds : DEFAULT_UNKNOWN_WAIT_ROUNDS;
   const activityOptions = {
-    startToCloseTimeout: `${task.limits.stepTimeoutSeconds}s`,
+    startToCloseTimeout: `${activityBudgetSeconds({ stepTimeoutSeconds: task.limits.stepTimeoutSeconds, unknownWaitMs, unknownWaitRounds })}s`,
     retry: { maximumAttempts: 1 },
     ...(options.activityTaskQueue ? { taskQueue: options.activityTaskQueue } : {}),
   };

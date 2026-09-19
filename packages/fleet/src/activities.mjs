@@ -1,9 +1,12 @@
 import { ApplicationFailure } from '@temporalio/activity';
+import { DEFAULT_UNKNOWN_WAIT_MS, DEFAULT_UNKNOWN_WAIT_ROUNDS } from './limits.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const branchOf = task => `dao/issue-${task.issue}-g${task.generation}`;
-const fail = (code, message) => ApplicationFailure.nonRetryable(message, code);
+// details 是可变参数（nonRetryable(message, type, ...details)），不是数组——传数组会变成 [[…]]，
+// 上层读 error.details[0].sessionKey 会拿到 undefined（实咬过一次）。
+const fail = (code, message, ...details) => ApplicationFailure.nonRetryable(message, code, ...details);
 
 /** 审查输出解析：只认**恰好一份**含 findings 数组的 JSON。模型先给结论、再回显空模板时，
  *  取「最后一块」会把有阻塞的审查读成通过——宁可 unscanned，不猜。 */
@@ -51,7 +54,7 @@ export function parseSingle(text, predicate) {
 export const parseFindings = text => parseSingle(text, value => Array.isArray(value.findings));
 export const parsePlan = text => parseSingle(text, value => typeof value.plan === 'string' && value.plan.trim().length > 0);
 
-export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = 120000, unknownWaitRounds = 3, now = () => new Date().toISOString() }) {
+export function createActivities({ runtime, gh, git, gitIdentity, installDeps, projects, profileOf, reviewerPrompt, leadPrompt, executorPrompt, closeIssue, deploy, pushEnv = {}, unknownWaitMs = DEFAULT_UNKNOWN_WAIT_MS, unknownWaitRounds = DEFAULT_UNKNOWN_WAIT_ROUNDS, sleepFn = sleep, now = () => new Date().toISOString() }) {
   const projectPath = repository => {
     const path = projects[repository];
     if (!path) throw fail('UNSUPPORTED_CAPABILITY', `no local checkout mapped for ${repository}`);
@@ -108,24 +111,37 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
     }
     const key = started?.sessionKey || started?.key;
     if (!key) throw fail('SERVICE_UNAVAILABLE', 'session launch returned no key');
+    const isWaiting = (settledState, viewState) => settledState?.status === 'waiting_user' || viewState?.phase === 'waiting_user';
     let settled = await runtime.waitForCompletion(key, { timeoutMs: task.limits.stepTimeoutSeconds * 1000 });
     let view = await runtime.readSession(key);
-    if (settled?.status === 'waiting_user' || view?.phase === 'waiting_user') {
+    if (isWaiting(settled, view)) {
       // 会话在等人回答（权限/问题）：重试只会再问一次，也不是传输故障——单独一态，交上层停手。
-      throw fail('WAITING_USER', `${role} session is waiting for an answer`);
+      // 带上 sessionKey：接手路径要能**直接核实释放**它占着的树（复核实咬：只 reap 会跳过活跃会话）。
+      throw fail('WAITING_USER', `${role} session is waiting for an answer`, { sessionKey: key, role });
     }
     // unknown 是「这次没读到终态」，不是「会话失败」——多等几轮再判，
     // 不许把还在干活的会话当失败处理（g6 实咬：判 unknown 后立刻收尾 = 取消在跑的会话）。
+    // 每轮只等一次 waitForCompletion：它自己就会轮询到 timeoutMs 才返回（execution-runtime
+    // 对未定态睡满），这里再 sleep 一次会把墙钟变成 2×，活动预算就盖不住（复核实咬 P1）。
     for (let attempt = 0; attempt < unknownWaitRounds && settled?.status === 'unknown'; attempt += 1) {
-      await sleep(unknownWaitMs);
       settled = await runtime.waitForCompletion(key, { timeoutMs: unknownWaitMs });
       view = await runtime.readSession(key);
+      // 宽限里变成等人也要立刻上报：晚到的 waiting_user 若漏过这里会被折成可重试，
+      // 重试再问一遍同一句——#1442 掐掉的死循环会回来（复核实咬）。
+      if (isWaiting(settled, view)) throw fail('WAITING_USER', `${role} session is waiting for an answer`, { sessionKey: key, role });
     }
-    // 只有终态才收尾：租约闸是「一棵树同时只许一个会话」，会话不释放下一轮起不来；
-    // 但非终态时收尾＝取消仍在跑的会话，宁可把未定抛给上层重试，也不杀活人。
+    // 只有终态才收尾；未知态先等满宽限（不许把还在干活的会话当失败），
+    // 宽限用尽仍未知才停掉让树——两件事分开写，别再合成「非终态一律不动」。
     if (settled?.status === 'done' || settled?.status === 'failed') {
       const released = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
       if (released?.ok !== true) throw fail('SERVICE_UNAVAILABLE', `session release unverified: ${String(released?.why || '').slice(0, 120)}`);
+    } else if (settled?.status === 'unknown') {
+      // 宽限用尽仍未知：不能「既不起新的、也杀不掉」——会话占着树，上层重试撞租约成死循环（复核实咬）。
+      // 到这里已经等满 unknownWaitRounds 轮（默认 6 分钟）；停掉让树，让重试从 checkpoint 重来。
+      // 停不干净要如实抛（树仍被占着），不许装作已释放。
+      const released = await runtime.stopSession(key).catch(error => ({ ok: false, why: String(error?.message || error) }));
+      if (released?.ok !== true) throw fail('SERVICE_UNAVAILABLE', `unknown session could not be released: ${String(released?.why || '').slice(0, 120)}`);
+      throw fail('DEADLINE_EXCEEDED', `${role} session unknown after grace; session stopped to free the tree`);
     }
     return { key, status: settled?.status, view };
   };
@@ -181,7 +197,12 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
         // 有提交就按完成接手；没有提交才真的是卡住——不追着它发明的每条命令去放宽白名单。
         const committed = await headOf(prepared.checkpoint);
         if (committed === (feedback?.head || prepared.head)) throw error;
-        await reapWorkdirSessions(prepared.checkpoint).catch(() => {});
+        // 接手前必须**核实释放**会话占着的树：reap 默认 keepActive，等人中的会话不是终态会被跳过，
+        // 树仍被占着，下一轮 execute/lead 撞租约（复核实咬）。停不掉就不接手（宁可停手报人）。
+        const sessionKey = error?.details?.[0]?.sessionKey || key;
+        if (!sessionKey) throw fail('UNSUPPORTED_CAPABILITY', 'handoff without session key');
+        const released = await runtime.stopSession(sessionKey).catch(stopError => ({ ok: false, why: String(stopError?.message || stopError) }));
+        if (released?.ok !== true) throw fail('SERVICE_UNAVAILABLE', `handoff session release unverified: ${String(released?.why || '').slice(0, 120)}`);
         status = 'waiting_user-with-commit';
       }
       if (status !== 'done' && status !== 'waiting_user-with-commit') throw fail(status === 'unknown' ? 'DEADLINE_EXCEEDED' : 'TRANSPORT_CLOSED', `executor session ${status}`);
@@ -214,7 +235,7 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
         const checks = rollup.map(check => ({ name: check.name || check.context, status: check.status, conclusion: check.conclusion ?? null }));
         const settled = head === artifact.head && checks.length > 0 && checks.every(check => check.status === 'COMPLETED');
         if (settled || Date.now() >= deadline) return { scanned: true, head, checks };
-        await sleep(15000);
+        await sleepFn(15000);
       }
     },
     async review(task, artifact, { checks }) {
