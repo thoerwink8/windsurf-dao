@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
-const MOD = import('file://' + path.resolve(__dirname, '..', 'scripts', 'leg-expiry.mjs').replace(/\/g, '/'));
+const MOD = import('file://' + path.resolve(__dirname, '..', 'scripts', 'leg-expiry.mjs').replace(/\\/g, '/'));
 
 const profiles = [
   { id: 'enabled-leg', enabled: true, accountPoolId: 'pool-a', agent: 'pi', model: 'm' },
