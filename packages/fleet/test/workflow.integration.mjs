@@ -31,6 +31,8 @@ function activities(overrides = {}) {
     // 这正是 #1422 的由来：fleet 测试不在 CI 面上，改坏了只有本地跑的人知道。
     selfReview: async () => ({ scanned: true, head: H, findings: [] }),
     changedFiles: async () => ({ scanned: true, files: ['scripts/lib/x.mjs'] }),
+    // T39 ④：卡住时会上报——假活动里也得有，否则工作流卡在「activity not found」上（#1422 实咬过）。
+    escalate: async () => ({ written: true, path: '/tmp/escalation.json' }),
     review: async () => ({ completed: true, head: H, findings: [], identityVerified: true, executorFamily: 'xai', reviewerFamily: 'anthropic' }),
     integrate: async task => ({ repository: task.repository, issue: task.issue, pr: 19, merged: true, sourceHead: H, mergeCommit: M, baseRefName: 'master' }),
     deploy: async () => ({ checked: true, healthy: true, commit: M }),

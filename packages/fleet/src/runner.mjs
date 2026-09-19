@@ -1,6 +1,7 @@
 import { normalizeTask, judgeReview, judgeChecks, judgeDelivery, classifyStepFailure } from './contract.mjs';
 import { splitFindings } from './triage.mjs';
 import { classifyRisk, tierPlan } from './risk.mjs';
+import { buildEscalation } from './escalation.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
 const phases = { prepare: 'preparing', lead: 'planning', execute: 'executing', verify: 'verifying', changedFiles: 'classifying', selfReview: 'self-reviewing', review: 'reviewing', integrate: 'integrating', deploy: 'deploying', closeIssue: 'closing' };
@@ -16,9 +17,19 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
   delete state.reason;
   delete state.failureClass;
   const report = () => onState(copy(state));
-  const finish = (status, reason, extra = {}) => {
+  const finish = async (status, reason, extra = {}) => {
     Object.assign(state, { state: status, ...extra });
     if (reason) state.reason = reason;
+    if (status === 'blocked') {
+      // T39 ④：阶梯走完还解决不了就**上报指挥官裁决**（机器可读载荷），别继续空转。
+      state.escalation = buildEscalation({ task, state, reason, extra });
+      try {
+        state.escalationReceipt = await io.escalate(task, state.escalation);
+      } catch (error) {
+        // 上报失败不挡收尾，但要在状态里留痕（不许静默）。
+        state.escalationReceipt = { written: false, why: String((error && error.message) || error).slice(0, 160) };
+      }
+    }
     report();
     return copy(state);
   };

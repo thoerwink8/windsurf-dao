@@ -1,5 +1,9 @@
 import { ApplicationFailure } from '@temporalio/activity';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { DEFAULT_UNKNOWN_WAIT_MS, DEFAULT_UNKNOWN_WAIT_ROUNDS } from './limits.mjs';
+import { escalationFileName } from './escalation.mjs';
 
 const SHA = /^[a-f0-9]{40}$/;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -386,6 +390,16 @@ export function createActivities({ runtime, gh, git, gitIdentity, installDeps, p
         if (settled || Date.now() >= deadline) return { scanned: true, head, checks };
         await sleepFn(15000);
       }
+    },
+    /** T39 ④：把裁决载荷写进指挥官收件箱（**派生数据**，落 `~/.dao/`，不进 git）。
+     *  候补腿由这里用腿表补齐——runner 是确定性工作流，不该自己读腿表。 */
+    async escalate(task, payload) {
+      const dir = process.env.DAO_FLEET_ESCALATION_DIR || join(homedir(), '.dao', 'fleet-escalations');
+      const enriched = { ...payload, candidates: await alternatesFor(task, 'executor'), writtenAt: now() };
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, escalationFileName(task.id));
+      writeFileSync(path, `${JSON.stringify(enriched, null, 2)}\n`);
+      return { written: true, path };
     },
     /** T34：改动文件清单（风险分层用）。取不到/为空 → `scanned:false`，调用方按 T2 保守走全流程。 */
     async changedFiles(task, artifact) {
