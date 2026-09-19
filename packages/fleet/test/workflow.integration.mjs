@@ -96,6 +96,23 @@ describe('Temporal-backed task lifecycle', { concurrency: false }, () => {
     assert.equal(f.calls.filter(call => call.name === 'closeIssue').length, 1);
     assert.equal(f.calls.filter(call => call.name === 'review').length, 2);
   });
+  it('上游容量满：长退避等待后重试成功，不占那 5 次小退避预算', async () => {
+    const queue = `fleet-${randomUUID()}`;
+    let reviewCalls = 0;
+    const f = activities({ review: async () => {
+      reviewCalls += 1;
+      if (reviewCalls <= 3) throw ApplicationFailure.nonRetryable('gpt-5.6-terra 当前可用容量已满，本次请求未被服务', 'SERVICE_UNAVAILABLE');
+      return { completed: true, head: H, findings: [], identityVerified: true, executorFamily: 'xai', reviewerFamily: 'anthropic' };
+    } });
+    const task = spec('owner/capacity');
+    const w = await worker(queue, f.handlers);
+    const result = await w.runUntil(() => env.client.workflow.execute('fusionTaskWorkflow', {
+      taskQueue: queue, workflowId: normalizeTask(task).id,
+      args: [task, { capacityWaitSeconds: 1, capacityWaitAttempts: 5 }],
+    }));
+    assert.equal(result.state, 'completed');
+    assert.equal(f.calls.filter(call => call.name === 'review').length, 4, '三次容量满都该重试，而不是烧完小退避就 block');
+  });
   it('cancellation is a durable command, not a model interpretation', async () => {
     const queue = `fleet-${randomUUID()}`;
     const f = activities({ review: async () => { throw ApplicationFailure.nonRetryable('Authentication required', 'AUTH_REQUIRED'); } });

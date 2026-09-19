@@ -133,5 +133,9 @@ describe('retry classification does not create new task cards', () => {
     assert.equal(classifyStepFailure({ code: 'WAITING_USER' }), 'blocked', '等人在回答不是传输故障，重试只会再问一次');
     assert.equal(classifyStepFailure({ code: 'AcpRuntimeError', reason: 'ACP session/new timed out' }), 'retryable', 'ACP 启动超时是瞬时故障');
     assert.equal(classifyStepFailure({ code: 'AcpRuntimeError', reason: 'session_exists' }), 'unscanned', '其它 ACP 错误不放行');
+    // 容量满是全队共享的资源条件：要长退避等待，不占那 5 次小退避预算（2026-09-19 relay 三模型同时满）。
+    assert.equal(classifyStepFailure({ code: 'SERVICE_UNAVAILABLE', reason: 'gpt-5.6-terra 当前可用容量已满，本次请求未被服务' }), 'capacity');
+    assert.equal(classifyStepFailure({ code: 'RATE_LIMITED', reason: 'too many requests' }), 'capacity');
+    assert.equal(classifyStepFailure({ code: 'SERVICE_UNAVAILABLE', reason: 'upstream 503' }), 'retryable', '没有容量字样的 503 仍走小退避');
   });
 });
