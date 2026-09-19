@@ -235,6 +235,9 @@ export function acpPermissionScope(rule, params, { cwd, toolCalls = [] }) {
       return resolved !== null && (resolved === cwd || resolved.startsWith(cwd + path.sep));
     };
     const inTree = words => words.every(word => {
+      // heredoc 提升出来的占位符（\0H<n>\0）是**消息文本**，不是路径：canonicalPath 见到 NUL 会
+      // 判 null，不跳过就会把 `git commit -m "$(cat <<'EOF' … EOF)"` 整句拒掉（CI 实咬）。
+      if (word.includes('\u0000')) return true;
       if (word.startsWith('--')) {
         if (!word.includes('=')) return true;
         return resolvesInside(word.slice(word.indexOf('=') + 1));
