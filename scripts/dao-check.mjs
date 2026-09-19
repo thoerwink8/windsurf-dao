@@ -129,7 +129,7 @@
 //    不比 drop-in 全文（那是 ⑳ 被故意配置钉红的病）。红/绿/空夹具验判别力。
 
 import { readdirSync, readFileSync, existsSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { cpus, homedir, tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -150,6 +150,8 @@ import { inspectEphemeralLifecycleSources } from './lib/ephemeral-lifecycle-chec
 import { checkMarshalIssueIdentity } from './lib/marshal-issue-identity-check.mjs';
 import { checkIssueGatewayAlive } from './lib/issue-gateway-check.mjs';
 import { checkMachinePaths } from './lib/machine-path-check.mjs';
+import { inspectOwnership, collectRepos, TABLE_REL as OWNERSHIP_TABLE_REL, POINTER_REL as OWNERSHIP_POINTER_REL } from './lib/ownership-check.mjs';
+import { parseBridge, inspectBridges } from './lib/resident-bridge.mjs';
 import {
   createChildRegistry, suiteTimeoutMs, timeoutNote, SUITE_TIMEOUT_ENV,
   OWNER_PID_ENV, OWNER_TOKEN_ENV, OWNER_STARTTIME_ENV, OWNER_BOOT_ENV,
@@ -628,7 +630,9 @@ function checkSecretsNotTracked() {
 // 文本会低估 token（偏宽松），对英文偏严格；预算值应据此保守设定。
 
 const BUDGET_MARK = /总量控制在\s*(\d+)\s*token/;
-const RESIDENT_NAME = /(^|-)CLAUDE\.md$/;
+// AGENTS.md 是 2026 最佳实践里的唯一真相源（CLAUDE.md 退成一行 @AGENTS.md 桥），
+// 所以它同属常驻注入面。桥自己不承载内容，不要求它带预算声明——预算归目标文件。
+const RESIDENT_NAME = /(^|-)CLAUDE\.md$|^AGENTS\.md$/;
 
 function checkResidentBudget() {
   const found = [];
@@ -642,7 +646,7 @@ function checkResidentBudget() {
       const txt = readFileSync(p, 'utf8');
       const m = txt.match(BUDGET_MARK);
       if (m) found.push({ rel, budget: Number(m[1]), tokens: Math.round(txt.length / 2) });
-      else if (RESIDENT_NAME.test(f)) missing.push(rel);
+      else if (RESIDENT_NAME.test(f) && !parseBridge(txt).bridge) missing.push(rel);
     }
   }
   if (missing.length > 0) {
@@ -2165,6 +2169,10 @@ checkStrikesSamples();
 checkStrikesLive();
 checkMachinePathSamples();
 checkMachinePathLive();
+checkOwnershipSamples();
+checkOwnershipLive();
+checkResidentBridgeSamples();
+checkResidentBridgeLive();
 checkNoAutoCloseSamples();
 checkNoAutoCloseLive();
 checkDesignExamHarvestSamples();
@@ -3239,6 +3247,120 @@ function checkMachinePathLive() {
   const r = checkMachinePaths({ root: ROOT });
   if (r.green) green(r.green);
   else fail(...r.fail);
+}
+
+// 概念归属表闸：本仓有「家目录落点」的归属表，却没有「概念/任务类型 → 哪个仓 → 哪份文档」
+// 的表（2026-09-19 实咬：接渠道这类活，知识主体在他仓，本仓 grep 零命中，现场分不清
+// 「本仓真没有」和「答案在别的仓」）。每条「看哪」必须真实存在；他仓不在本机 = 没查成。
+function ownershipRepoRoots(tableText) {
+  const parent = dirname(ROOT);
+  const roots = new Map();
+  for (const name of collectRepos(tableText || '')) {
+    const root = name === 'windsurf-dao' ? ROOT : join(parent, name);
+    if (existsSync(root)) roots.set(name, root);
+  }
+  return roots;
+}
+
+function checkOwnershipSamples() {
+  const base = join(ROOT, 'tests', 'fixtures', 'ownership');
+  if (!existsSync(base)) {
+    fail('概念归属表样本目录不在', '本次没查成：恢复 tests/fixtures/ownership/{ok,red,nopointer,unscanned}', base);
+    return;
+  }
+  const want = { ok: 'ok', red: 'red', nopointer: 'red', unscanned: 'unscanned' };
+  const problems = [];
+  let n = 0;
+  for (const [kind, expect] of Object.entries(want)) {
+    const repoRoot = join(base, kind, 'repo');
+    if (!existsSync(repoRoot)) {
+      problems.push(`缺 ${kind}/repo`);
+      continue;
+    }
+    const tableText = readFileSync(join(repoRoot, OWNERSHIP_TABLE_REL), 'utf8');
+    const pointerPath = join(repoRoot, 'RESIDENT.md');
+    const pointerText = existsSync(pointerPath) ? readFileSync(pointerPath, 'utf8') : null;
+    const reposDir = join(base, kind, 'repos');
+    const repoRoots = new Map();
+    if (existsSync(reposDir)) {
+      for (const name of readdirSync(reposDir)) repoRoots.set(name, join(reposDir, name));
+    }
+    const r = inspectOwnership({ tableText, pointerText, repoRoots });
+    if (r.kind !== expect) problems.push(`${kind}/ 自称该 ${expect} 但判成 ${r.kind}`);
+    else n += 1;
+  }
+  if (problems.length) {
+    fail(`概念归属表样本对不上 ${problems.length} 处`, '齐必绿、指向空气必红、没指针必红、他仓不在本机必没查成', problems.join('；'));
+    return;
+  }
+  green(`概念归属表样本 绿/红/没指针/没查成 各判别（${n} 份）`);
+}
+
+function checkOwnershipLive() {
+  const tablePath = join(ROOT, OWNERSHIP_TABLE_REL);
+  const tableText = existsSync(tablePath) ? readFileSync(tablePath, 'utf8') : null;
+  const pointerPath = join(ROOT, OWNERSHIP_POINTER_REL);
+  const pointerText = existsSync(pointerPath) ? readFileSync(pointerPath, 'utf8') : null;
+  const r = inspectOwnership({ tableText, pointerText, repoRoots: ownershipRepoRoots(tableText) });
+  if (r.kind === 'ok') {
+    const off = r.unscannedEntries.length ? `（${r.unscannedEntries.length} 条他仓不在本机，没查成）` : '';
+    green(`概念归属表齐：查了 ${r.checked} 条他仓指针${off}`);
+    return;
+  }
+  if (r.kind === 'unscanned') {
+    skip(`概念归属表：${r.problems.join('；')}——本次没查成，不是绿`);
+    return;
+  }
+  fail(
+    `概念归属表红 ${r.problems.length} 处`,
+    'docs/ownership.json 每条「看哪」必须在他仓真实存在；常驻面 CLAUDE.md 必须有一行指向它',
+    r.problems.slice(0, 6).join('；'),
+  );
+}
+
+// 常驻面「一行桥」闸（2026 最佳实践：AGENTS.md 当唯一真相源，CLAUDE.md 退成 `@AGENTS.md`）。
+// 三个坑：代码块/行内代码里的 @ 不展开、桥断链或超 4 跳、symlink 在 Windows 退化成纯文本。
+// 样本在内存里构造——仓内不留叫 CLAUDE.md/AGENTS.md 的夹具，宿主会把任意层的同名文件当常驻面注入。
+function bridgeSamples() {
+  return [
+    { name: '绿：一行桥指到真相源', files: { 'CLAUDE.md': '@AGENTS.md\n', 'AGENTS.md': '# 真相源\n' }, want: 'ok' },
+    { name: '红：@导入写在代码块里（坑①）', files: { 'CLAUDE.md': '# 说明\n\n```\n@AGENTS.md\n```\n', 'AGENTS.md': '# 真相源\n' }, want: 'red' },
+    { name: '红：桥断链', files: { 'CLAUDE.md': '@MISSING.md\n' }, want: 'red' },
+    { name: '红：混了正文与导入', files: { 'CLAUDE.md': '@AGENTS.md\n\n再加一句\n', 'AGENTS.md': '# 真相源\n' }, want: 'red' },
+    { name: '没查成：一个常驻面都没有', files: {}, want: 'unscanned' },
+  ];
+}
+
+function checkResidentBridgeSamples() {
+  const problems = [];
+  let n = 0;
+  for (const s of bridgeSamples()) {
+    const r = inspectBridges({ root: '', rels: ['CLAUDE.md'], files: s.files });
+    if (r.kind !== s.want) problems.push(`${s.name}：判成 ${r.kind}（该 ${s.want}）`);
+    else n += 1;
+  }
+  if (problems.length) {
+    fail(`常驻桥样本对不上 ${problems.length} 处`, '三个坑各要一份红样本，绿与没查成各一份', problems.join('；'));
+    return;
+  }
+  green(`常驻桥样本 绿/坑①/断链/混写/没查成 各判别（${n} 份）`);
+}
+
+function checkResidentBridgeLive() {
+  const r = inspectBridges({ root: ROOT });
+  if (r.kind === 'ok') {
+    green(`常驻面桥齐${r.bridged.length ? `（桥：${r.bridged.join('、')}）` : '（无桥）'}`);
+    return;
+  }
+  if (r.kind === 'unscanned') {
+    skip(`常驻面桥：${r.problems.join('；')}——本次没查成，不是绿`);
+    return;
+  }
+  fail(
+    `常驻面桥红 ${r.problems.length} 处`,
+    'AGENTS.md 当真相源、CLAUDE.md 一行 @AGENTS.md；@ 不许写在代码块里，也不许用 symlink',
+    r.problems.slice(0, 6).join('；'),
+  );
 }
 
 function checkCompletionSignalAlive() {

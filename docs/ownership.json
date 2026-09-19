@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "note": "概念归属表。处理某个概念或任务类型前，先读这里指的那份文档，别只在本仓 grep——本仓 grep 不到时，现场分不清「本仓真没有」和「答案在别的仓」。本表与 host/machine/INDEX.md 分工：INDEX 管「家目录落点归哪个仓」，本表管「概念/任务类型归哪个仓、看哪几份」。常驻面只有一行指针（CLAUDE.md「体系类改动」节）。",
+  "entries": [
+    {
+      "概念": "渠道 / 腿 / 接线",
+      "关键词": ["渠道", "腿", "接线", "channel", "leg", "provider", "上游"],
+      "归仓": "ai-gateway-stack",
+      "看哪": ["docs/ROUTING.md", "docs/DECISIONS.md", "deploy/mirasim-bridge.mjs"],
+      "本仓只写": "选型与腿表（docs/model-routing.json、docs/execution-profiles.json）"
+    },
+    {
+      "概念": "Mirasim relay / 执行体服务端",
+      "关键词": ["mirasim", "relay", "中继", "执行体服务端", "mirasim-server"],
+      "归仓": "ai-gateway-stack",
+      "看哪": ["docs/MIRASIM.md", "deploy/mirasim-bootstrap.mjs", "deploy/machine-check.mjs"],
+      "本仓只写": "会话/派工侧读法（scripts/lib/mirasim-runtime.mjs）"
+    },
+    {
+      "概念": "Claude Code 客户端闸 / reclaude",
+      "关键词": ["reclaude", "不是 Claude Code 客户端", "non-cc-client", "claude 族"],
+      "归仓": "ai-gateway-stack",
+      "看哪": ["docs/MIRASIM.md", "docs/DECISIONS.md", "deploy/mirasim-bridge.mjs"],
+      "本仓只写": "claude 族腿的落点 + 两条判例（docs/observations/2026-09-05-mirasim叠reclaude的接法.md、docs/observations/2026-09-05-mirasim与reclaude结构互斥.md）。判据：reclaude 只服务官方 Claude Code CLI，抽成通用网关 = 把它存在的理由删掉"
+    },
+    {
+      "概念": "new-api 网关",
+      "关键词": ["new-api", "newapi", "网关", "gateway"],
+      "归仓": "ai-gateway-stack",
+      "看哪": ["docs/ROUTING.md", "deploy/20-newapi.sh", "deploy/30-channels.sh"],
+      "本仓只写": "gw 系腿的存废（docs/model-routing.json）"
+    },
+    {
+      "概念": "家目录落点",
+      "关键词": ["家目录", "落点", "INDEX", "换机"],
+      "归仓": "windsurf-dao",
+      "看哪": ["host/machine/INDEX.md", "host/machine/ignore.md"],
+      "本仓只写": "全写在本仓（A/B/C/D 类；E 类只登记仓名，不写装法）"
+    },
+    {
+      "概念": "执行体 / ACP",
+      "关键词": ["执行体", "ACP", "acp-runtime", "会话"],
+      "归仓": "windsurf-dao",
+      "看哪": ["scripts/lib/acp-runtime.mjs", "docs/execution-profiles.json"],
+      "本仓只写": "全写在本仓"
+    },
+    {
+      "概念": "额度",
+      "关键词": ["额度", "quota", "miraquota", "5h"],
+      "归仓": "miraquota-win",
+      "看哪": ["README.md"],
+      "本仓只写": "只读额度账本（host/machine/INDEX.md 登记 ~/.miraquota 归 miraquota-win）"
+    }
+  ]
+}
