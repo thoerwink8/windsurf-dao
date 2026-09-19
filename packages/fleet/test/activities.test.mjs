@@ -1,7 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createActivities, parseFindings, parsePlan, parseSingle, commitPrefixFor } from '../src/activities.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const H = 'a'.repeat(40);
 const B = 'b'.repeat(40);
@@ -91,6 +93,21 @@ describe('activities bind the workflow to real systems', () => {
     const { activities, calls } = harness({ gh: async (args) => (args[1] === 'list' ? { ok: true, out: '[{"number":19,"baseRefName":"develop"}]' } : { ok: true, out: '{}' }) });
     await assert.rejects(activities.execute(task, { plan: { plan: 'x' }, prepared: { checkpoint: '/trees/b', branch: 'b', head: B }, round: 0 }), /targets develop/);
     assert.equal(calls.some(([kind, ...rest]) => kind === 'gh' && rest[1] === 'create'), false);
+  });
+  it('T39：escalate 把裁决载荷写进收件箱（派生数据落 ~/.dao），候补腿由活动补齐', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'fleet-esc-'));
+    process.env.DAO_FLEET_ESCALATION_DIR = dir;
+    try {
+      const { activities } = harness({ deps: { alternatesOf: async () => ['exec-alt'] } });
+      const r = await activities.escalate(task, { taskId: task.id, options: ['retry', 'swap-leg'] });
+      assert.equal(r.written, true);
+      const doc = JSON.parse(readFileSync(r.path, 'utf8'));
+      assert.deepEqual(doc.candidates, ['exec-alt']);
+      assert.deepEqual(doc.options, ['retry', 'swap-leg']);
+      assert.ok(doc.writtenAt, '要留写入时间');
+    } finally {
+      delete process.env.DAO_FLEET_ESCALATION_DIR;
+    }
   });
   it('T39：上游容量墙 → 同 family 换腿重起，树/checkpoint 不动', async () => {
     let n = 0;

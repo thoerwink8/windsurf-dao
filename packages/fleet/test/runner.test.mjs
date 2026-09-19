@@ -24,6 +24,7 @@ function fixture(overrides = {}) {
     verify: async (_task, artifact) => ({ scanned: true, head: artifact.head, checks: [{ name: 'check', status: 'COMPLETED', conclusion: 'SUCCESS' }] }),
     selfReview: async (_task, artifact) => ({ scanned: true, head: artifact.head, findings: [] }),
     changedFiles: async () => ({ scanned: true, files: ['scripts/lib/x.mjs'] }),
+    escalate: async () => ({ written: true, path: '/tmp/esc.json' }),
     review: async (_task, artifact) => ({ ...pass(), head: artifact.head }),
     integrate: async (_task, artifact) => ({ repository: 'owner/repo', issue: 17, pr: 19, merged: true, sourceHead: artifact.head, mergeCommit: M, baseRefName: 'master' }),
     deploy: async () => ({ checked: true, healthy: true, commit: M }),
@@ -121,6 +122,29 @@ describe('one durable task owns execution, review, rework and closure', () => {
     assert.equal(result.riskTier, 'T2');
     assert.equal(f.calls.includes('selfReview'), true);
     assert.equal(f.calls.includes('review'), true);
+  });
+  it('T39：阶梯走完仍卡住 → 上报裁决载荷（机器可读、含选项）', async () => {
+    let escalated = null;
+    const f = fixture({
+      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: [{ id: 'p1', severity: 'P1', detail: 'd' }] }),
+      escalate: async (_task, payload) => { escalated = payload; return { written: true, path: '/tmp/x.json' }; },
+    });
+    const result = await runFusionTask({ ...task(), limits: { reviewRounds: 1, stepTimeoutSeconds: 60 } }, f.io);
+    assert.equal(result.state, 'blocked');
+    assert.equal(result.reason, 'review-budget-exhausted');
+    assert.equal(escalated.blockedReason, 'review-budget-exhausted');
+    assert.deepEqual(escalated.options, ['retry', 'swap-leg', 'cancel', 'accept-as-is']);
+    assert.equal(result.escalationReceipt.written, true);
+  });
+  it('T39：上报失败不挡收尾，但状态里留痕（不许静默）', async () => {
+    const f = fixture({
+      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: [{ id: 'p1', severity: 'P1', detail: 'd' }] }),
+      escalate: async () => { throw new Error('inbox unwritable'); },
+    });
+    const result = await runFusionTask({ ...task(), limits: { reviewRounds: 1, stepTimeoutSeconds: 60 } }, f.io);
+    assert.equal(result.state, 'blocked');
+    assert.equal(result.escalationReceipt.written, false);
+    assert.match(result.escalationReceipt.why, /inbox unwritable/);
   });
   it('keeps rework inside the same task and does not integrate an earlier rejected head', async () => {
     let reviews = 0;
