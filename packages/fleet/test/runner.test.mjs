@@ -43,12 +43,12 @@ describe('one durable task owns execution, review, rework and closure', () => {
   it('T32：P2/P3（advisory）随 delivery 走到 closeIssue，不被丢掉', async () => {
     let seen = null;
     const f = fixture({
-      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: [{ id: 'minor', severity: 'P2', type: 'perf', detail: 'Minor.' }] }),
+      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: [{ id: 'minor', severity: 'P2', type: 'perf', effort: 'small', detail: 'Minor.' }] }),
       closeIssue: async (_task, delivery) => { seen = delivery; return { repository: 'owner/repo', issue: 17, closed: true }; },
     });
     const result = await runFusionTask(task(), f.io);
     assert.equal(result.state, 'completed');
-    assert.deepEqual(seen.advisory, [{ id: 'minor', severity: 'P2', type: 'perf', detail: 'Minor.' }]);
+    assert.deepEqual(seen.advisory, [{ id: 'minor', severity: 'P2', type: 'perf', effort: 'small', detail: 'Minor.' }]);
   });
   it('T7：返工反馈里带上一轮执行会话的 key（续跑用）', async () => {
     let seen = null;
@@ -61,6 +61,22 @@ describe('one durable task owns execution, review, rework and closure', () => {
     const result = await runFusionTask(task(), f.io);
     assert.equal(result.state, 'completed');
     assert.equal(seen.sessionKey, 's1');
+  });
+  it('T33：返工只带「P1 + 急的 + 便宜且上下文热的」，大改不进返工', async () => {
+    let seen = null;
+    let reviews = 0;
+    const f = fixture({
+      execute: async () => ({ repository: 'owner/repo', head: reviews ? B : A, checkpoint: 'artifact', sessionKey: 's1' }),
+      review: async (_task, artifact) => ({ ...pass(), head: artifact.head, findings: reviews++ ? [] : [
+        { id: 'p1', severity: 'P1', detail: 'd' },
+        { id: 'small', severity: 'P2', type: 'perf', effort: 'small', detail: 'd' },
+        { id: 'big', severity: 'P2', type: 'perf', effort: 'large', detail: 'd' },
+      ] }),
+      lead: async (_task, { feedback }) => { if (feedback) seen = feedback; return { plan: 'p' }; },
+    });
+    const result = await runFusionTask(task(), f.io);
+    assert.equal(result.state, 'completed');
+    assert.deepEqual(seen.blocking.map((x) => x.id), ['p1', 'small']);
   });
   it('keeps rework inside the same task and does not integrate an earlier rejected head', async () => {
     let reviews = 0;

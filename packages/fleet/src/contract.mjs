@@ -4,6 +4,8 @@ const positive = value => Number.isSafeInteger(value) && value > 0;
 const unknown = reason => ({ state: 'unscanned', reason });
 // T32：债的分类轴（与 scripts/lib/debt-ledger.mjs 的 DEBT_TYPES 同口径）。
 const DEBT_TYPES = ['security', 'data', 'contract', 'correctness', 'perf', 'maintainability', 'ui'];
+// T33：工作量估计（与 src/triage.mjs 的 EFFORTS 同口径）——代码据此判「当场修还是进册子」。
+const EFFORTS = ['small', 'medium', 'large'];
 
 export function taskIdOf({ repository, issue, generation = 1 } = {}) {
   if (!text(repository) || !positive(issue) || !positive(generation)) throw new Error('invalid task identity');
@@ -58,6 +60,8 @@ export function judgeReview(task, head, review) {
     if (finding.file != null && !text(finding.file)) return unknown('review-findings-invalid');
     if (finding.line != null && !Number.isInteger(finding.line)) return unknown('review-findings-invalid');
     if (finding.severity !== 'P1' && !DEBT_TYPES.includes(String(finding.type || '').toLowerCase())) return unknown('review-findings-invalid');
+    // T33：工作量也必给（small|medium|large）——代码据它判「当场修还是进册子」。
+    if (finding.severity !== 'P1' && !EFFORTS.includes(String(finding.effort || '').toLowerCase())) return unknown('review-findings-invalid');
     seen.add(finding.id);
   }
   const blocking = review.findings.filter(finding => finding.severity === 'P1');
