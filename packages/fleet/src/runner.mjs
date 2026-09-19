@@ -113,7 +113,9 @@ export async function runFusionTask(input, io, { previous, cancelled = () => fal
     const delivered = judgeDelivery(task, state.acceptedHead, state.delivery);
     if (delivered.state !== 'passed') return finish('blocked', delivered.reason, { failureClass: delivered.state });
     if (!state.closed) {
-      const receipt = await step('closeIssue', state.delivery, { advisory: state.advisory });
+      // T32：advisory 必须**随 delivery 走**——活动层签名是 (task, delivery)，第三个参数会被丢掉
+      // （此前就是这么丢的：P2/P3 到不了任何消费方 = 静默丢失）。
+      const receipt = await step('closeIssue', { ...state.delivery, advisory: state.advisory });
       if (receipt?.closed !== true || receipt.repository !== task.repository || receipt.issue !== task.issue) return finish('blocked', 'closure-unconfirmed', { failureClass: 'unscanned' });
       state.closed = receipt;
       report();

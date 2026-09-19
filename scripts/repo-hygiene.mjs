@@ -53,6 +53,17 @@ function prBacklog() {
   return { open: list.map(p => ({ number: p.number, mergeable: p.mergeable, ageDays: (now - Date.parse(p.createdAt)) / 86400000 })) };
 }
 
+// T32：债册子（P2/P3 审查发现的账）。同 #1503——调 debt-ledger 自己，别重造判据。
+function debtLedger() {
+  const r = run(process.execPath, [join(ROOT, 'scripts', 'debt-ledger.mjs'), '--json']);
+  let doc;
+  try { doc = JSON.parse(String(r.stdout || '')); } catch {
+    return { state: 'unscanned', why: `debt-ledger 没查成（${String(r.stderr || r.stdout || '').trim().slice(0, 100)}）` };
+  }
+  if (!doc || !doc.verdict) return { state: 'unscanned', why: 'debt-ledger 回执形态不对' };
+  return { state: doc.verdict.state, why: doc.verdict.why };
+}
+
 // #1503：落后单清退。不重造判据——调 issue-retire 自己（它是机械判）。它红时退出码 1，
 // 但 stdout 仍是合法 JSON，所以先看能不能解析，别把「有该清退的」洗成「没查成」。
 function issueRetire() {
@@ -112,6 +123,7 @@ function main() {
   checks.push({ id: 'pr-backlog', kind: 'PR 积压', verdict: backlog.state ? backlog : judgePrBacklog({ open: backlog.open, ...HYGIENE_DEFAULTS }) });
 
   checks.push({ id: 'issue-retire', kind: '落后单清退', verdict: issueRetire() });
+  checks.push({ id: 'debt-ledger', kind: '债册子', verdict: debtLedger() });
   checks.push({ id: 'stage-board', kind: '阶段盘面', verdict: stageBoard() });
 
   const summary = summarizeHygiene(checks.map(c => c.verdict));

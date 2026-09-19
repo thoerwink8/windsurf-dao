@@ -13,7 +13,7 @@
 // 持久化与恢复在 src/workflows.mjs；与真实系统（统一执行目录 / gh-as / git）的接缝在 src/activities.mjs。
 // 本文件只做参数解析与装配，不写判定。
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { join, resolve } from 'node:path';
@@ -225,6 +225,23 @@ async function makeActivities() {
   const { resolveToken } = await import('../../../scripts/lib/gh.mjs');
   const runtime = createExecutionRuntime();
   const closeIssue = async ({ task, delivery }) => {
+    // T32：先把 P2/P3（advisory）折进债册子——**先记账再关单**：账记不下就重试，别静默丢。
+    // 关单是不可逆的；记账失败时还没关，重试是安全的。
+    const advisory = Array.isArray(delivery && delivery.advisory) ? delivery.advisory : [];
+    if (advisory.length) {
+      const dir = mkdtempSync(join(os.tmpdir(), 'fleet-debt-'));
+      const findings = join(dir, 'findings.json');
+      writeFileSync(findings, JSON.stringify(advisory));
+      const rec = await run(process.execPath, [
+        join(REPO_ROOT, 'scripts', 'debt-ledger.mjs'),
+        '--record', findings,
+        '--repo', task.repository,
+      ]);
+      if (!rec.ok)
+        throw Object.assign(new Error(`debt record failed: ${String(rec.error || '').slice(0, 200)}`), {
+          code: 'SERVICE_UNAVAILABLE',
+        });
+    }
     const comment = `fleet：任务 ${task.id} 完成——PR #${delivery.pr} 已合并（${delivery.mergeCommit}），检查全绿、独立审查通过。`;
     const closed = await run(process.execPath, [
       join(REPO_ROOT, 'scripts', 'issue-gateway.mjs'),

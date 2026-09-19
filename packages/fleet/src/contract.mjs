@@ -51,6 +51,11 @@ export function judgeReview(task, head, review) {
   const seen = new Set();
   for (const finding of review.findings) {
     if (!finding || !text(finding.id) || seen.has(finding.id) || !['P1', 'P2', 'P3'].includes(finding.severity) || !text(finding.detail)) return unknown('review-findings-invalid');
+    // T32：位置/类型是**可选**的（契约先保证 {id,severity,detail}）；带了就必须是干净的值，
+    // 免得脏值进债册子。没带时债册子按 id 兜底指纹（scripts/lib/debt-ledger.mjs）。
+    if (finding.file != null && !text(finding.file)) return unknown('review-findings-invalid');
+    if (finding.line != null && !Number.isInteger(finding.line)) return unknown('review-findings-invalid');
+    if (finding.type != null && !text(finding.type)) return unknown('review-findings-invalid');
     seen.add(finding.id);
   }
   const blocking = review.findings.filter(finding => finding.severity === 'P1');
