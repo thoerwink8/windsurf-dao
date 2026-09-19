@@ -18,6 +18,15 @@
 # 升级器自己的 managed-update.conf（改 ExecStart 走 run-server.sh）不是本仓的，
 # 装机脚本不准删。
 #
+# MIRASIM_NO_AGENT_EGRESS / MIRASIM_ACCOUNT_USAGE_PROBE（2026-09-19 实咬）：
+# reclaude 启动会把 HTTPS_PROXY=127.0.0.1:<daemon> + 自家 CA 写进 ~/.claude/settings.json 的 env；
+# mirasim server 有一条「借用智能体出网配置」逻辑，读到就当**自己**的出网代理，于是 relay/登录
+# 流量和每分钟一次的账号额度探针（haiku + x-mirasim-probe）全从 reclaude 穿出去——reclaude 只认
+# 真 Claude Code 指纹，探针被 400，relay 腿则平白依赖 reclaude 守护进程活着。两个都是 mirasim
+# 自带开关：前者让它不借代理；后者关探针（这台机 agent_accounts=[]，探针本来没消费者；
+# 云端额度走 relay 账本，不受影响）。会话不受影响——会话的代理是 reclaude 给自己子进程配的。
+# 验：~/.reclaude/logs/daemon.log 不再新增 `non-cc-client`（server-check ㉕）。
+#
 # User=orca 是硬要求。ExecStart 指家目录里的官方包，不是本仓脚本。
 #
 # 装（服务器）：sudo bash scripts/install-mirasim-ws-probe.sh
@@ -32,6 +41,8 @@ After=network-online.target
 User=orca
 Environment=HOME=/home/orca
 Environment=MIRASIM_OPEN_BROWSER=0
+Environment=MIRASIM_NO_AGENT_EGRESS=1
+Environment=MIRASIM_ACCOUNT_USAGE_PROBE=0
 # #792：不继承个人 GH_TOKEN；服务端不写 Issue，但和其它单元同一把尺。
 UnsetEnvironment=GH_TOKEN GITHUB_TOKEN
 Environment=GH_CONFIG_DIR=/var/empty

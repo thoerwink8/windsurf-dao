@@ -1413,6 +1413,66 @@ export function classifyCommanderStatus({ probed = false, reason = '', code, std
   return { state: RED, detail };
 }
 
+/**
+ * ㉕ reclaude 没在替 mirasim 收流量（2026-09-19 实咬，判例见 mirasim-server.service 头注释）。
+ * 判据是 reclaude 守护自己的日志：它每拒一次非 Claude Code 客户端就写一行 `non-cc-client`。
+ * 这条线索不复用 mirasim 的任何解析——mirasim 自己看不见自己在借代理。
+ * 三态：没日志/没时间戳/守护 staleMs 没写过 → unknown（没样本）；窗口内 ≥1 条 → red；否则 ok。
+ */
+export const RECLAUDE_NONCC_LINE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.\d+)? reclaude event: non-cc-client\b/;
+export const RECLAUDE_LOG_LINE = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.\d+)? /;
+export function classifyReclaudeNonCc({
+  probed = false, reason = '', lines = [], now = Date.now(),
+  windowMs = 30 * 60_000, staleMs = 24 * 3600_000,
+} = {}) {
+  if (!probed) return { state: UNKNOWN, detail: `reclaude 守护日志没读成：${reason || ''}` };
+  // 日志时间戳是本机时间、无时区——按本地解析，和 Date.now() 同一把尺。
+  const stampOf = (m) => new Date(`${m[1]}T${m[2]}`).getTime();
+  let latest = null;
+  let hits = 0;
+  let latestHit = null;
+  for (const line of lines) {
+    const any = RECLAUDE_LOG_LINE.exec(line);
+    if (!any) continue;
+    const ts = stampOf(any);
+    if (!Number.isFinite(ts)) continue;
+    if (latest === null || ts > latest) latest = ts;
+    if (RECLAUDE_NONCC_LINE.test(line) && now - ts <= windowMs) {
+      hits += 1;
+      if (latestHit === null || ts > latestHit) latestHit = ts;
+    }
+  }
+  if (latest === null) return { state: UNKNOWN, detail: 'reclaude 守护日志里一行时间戳都解析不出——没样本，不是 0 条' };
+  const fmt = (t) => new Date(t).toISOString().replace('T', ' ').slice(0, 19);
+  if (now - latest > staleMs) {
+    return { state: UNKNOWN, detail: `reclaude 守护 ${Math.round((now - latest) / 3600_000)}h 没写过日志（最后 ${fmt(latest)}）——判不了，不是没事` };
+  }
+  if (hits > 0) {
+    return {
+      state: RED, count: hits,
+      detail: `最近 ${Math.round(windowMs / 60_000)} 分钟 reclaude 拒了 ${hits} 次非 Claude Code 客户端（最近 ${fmt(latestHit)}）`
+        + '——多半是 mirasim 在借 ~/.claude/settings.json 的代理：查 mirasim-server 单元有没有 MIRASIM_NO_AGENT_EGRESS=1，'
+        + '或还有别的 mirasim 实例（root 的 ~/.mirasim-remote）在跑',
+    };
+  }
+  return { state: OK, count: 0, detail: `最近 ${Math.round(windowMs / 60_000)} 分钟 0 条 non-cc-client（日志最后一行 ${fmt(latest)}）` };
+}
+
+function checkReclaudeNonCc() {
+  // 只读跑本检查这个用户（orca）的守护日志；root 那份读不到，root 实例的问题靠 (21) 与人盯。
+  const path = join(homedir(), '.reclaude', 'logs', 'daemon.log');
+  let text;
+  try { text = readFileSync(path, 'utf8'); } catch (e) {
+    return classifyReclaudeNonCc({
+      probed: false,
+      reason: e.code === 'ENOENT' ? `${path} 不存在（这台机器没装 reclaude 或守护没起过）` : `${path}：${e.message}`,
+    });
+  }
+  // 只看尾部：日志只追加不轮转，全读会随时间变慢。
+  const lines = text.slice(-256 * 1024).split('\n');
+  return classifyReclaudeNonCc({ probed: true, lines });
+}
+
 const CHECKS = [
   ['② 非 root 运行', checkNotRoot],
   ['⑧ land timer 在册且启用', checkLandAutomation],
@@ -1432,6 +1492,7 @@ const CHECKS = [
   ['(22) mirasim 侧实跑腿与选型腿表对得上（#944）', checkModelReconcile],
   ['(23) GitHub 事件桥在守着（自证 ping 通，#956）', checkGhEventBridge],
   ['(24) 用量特权副本跟仓内 import 闭包一致（#1231）', checkUsageInstallCopy],
+  ['(25) reclaude 没在替 mirasim 收流量（non-cc-client 归零）', checkReclaudeNonCc],
 ];
 
 function outPath() {
@@ -1471,6 +1532,19 @@ function selfTest() {
   });
   if (noCatalog.state !== UNKNOWN) {
     failures.push(`没扫到目录应判 unknown，实际 ${noCatalog.state}`);
+  }
+
+  // ㉕：故意造「窗口内有一条 non-cc-client」必须红；空日志/日志读不到必须 unknown，不许当 0 条。
+  const nowIso = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.000`;
+  const leak = classifyReclaudeNonCc({ probed: true, now: nowIso.getTime(), lines: [`${stamp(nowIso)} reclaude event: non-cc-client`] });
+  if (leak.state !== RED || leak.count !== 1) failures.push(`故意一条 non-cc-client 应判红/1，实际 ${leak.state}/${leak.count}`);
+  if (classifyReclaudeNonCc({ probed: true, now: nowIso.getTime(), lines: [] }).state !== UNKNOWN) {
+    failures.push('reclaude 空日志应判 unknown（没样本），不是 ok');
+  }
+  if (classifyReclaudeNonCc({ probed: false, reason: 'ENOENT' }).state !== UNKNOWN) {
+    failures.push('reclaude 日志读不到应判 unknown');
   }
 
   // #829：land timer 未启用必须红；没探到必须没查成。
